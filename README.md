@@ -198,5 +198,59 @@ Apache 2.0 — see [LICENSE](LICENSE)
 
 ---
 
+## 🦙 Running with Ollama (no GPU needed)
+
+RepairWise supports **Ollama as a backend** — run Gemma 4 E2B locally on any machine without a GPU, without a HuggingFace token, without CUDA.
+
+```bash
+# 1. Install Ollama
+curl -fsSL https://ollama.ai/install.sh | sh   # Linux/Mac
+# Windows: https://ollama.ai/download
+
+# 2. Pull Gemma 4 E2B
+ollama pull gemma4:e2b
+
+# 3. Clone RepairWise
+git clone https://github.com/SocAbdul/repairwise-gemma
+cd repairwise-gemma
+pip install -r requirements.txt
+
+# 4. Run with Ollama backend
+REPAIRWISE_BACKEND=ollama python app.py
+
+# Or use the standalone CLI (no Gradio needed):
+python run_ollama.py
+```
+
+### Ollama backend architecture
+
+```
+User query
+    │
+    ▼
+RepairWise Engine (Python)
+  Safety Triage ─── deterministic, always runs
+  4-Engine RAG ──── local embeddings, no internet
+  Ollama Client ─── HTTP POST to localhost:11434
+    │
+    ▼
+Ollama Server (localhost)
+  gemma4:e2b ─── quantized, runs on CPU (8GB RAM)
+                  or GPU if available
+```
+
+### Environment variables
+
+| Variable | Default | Description |
+|---|---|---|
+| `REPAIRWISE_BACKEND` | `transformers` | `ollama` or `transformers` or `auto` |
+| `OLLAMA_URL` | `http://localhost:11434` | Ollama server URL |
+| `OLLAMA_MODEL` | `gemma4:e2b` | Model to use |
+
+`auto` mode: tries Ollama first, falls back to transformers if not available.
+
+
+---
+
 *Built for the [Gemma 4 Good Hackathon 2026](https://www.kaggle.com/competitions/gemma-4-good-hackathon)*
 *Fine-tuned weights: [abdullahfasih/repairwise-gemma4-e2b-lora](https://huggingface.co/abdullahfasih/repairwise-gemma4-e2b-lora)*
