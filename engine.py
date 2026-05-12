@@ -20,6 +20,16 @@ from transformers import TextIteratorStreamer
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 from PIL import Image as PILImage
+# ── Data pack imports (knowledge base + templates) ──────────────────────────
+from data_pack import (
+    LOCAL_KNOWLEDGE,
+    CATEGORY_RESPONSE_TEMPLATES,
+    PHOTO_VISUAL_CATEGORIES,
+    SECTION_LABELS,
+)
+# Alias for backwards compatibility
+LABELS = SECTION_LABELS
+
 
 # ── Model globals (injected by app.py after loading) ─────────────────────────
 # In Kaggle notebooks these are kernel globals. As a module they must be
@@ -27,6 +37,101 @@ from PIL import Image as PILImage
 model = None
 processor = None
 DEMO_MODE = False  # Set to True by app.py if no GPU or model load fails
+
+# ── Ollama backend ────────────────────────────────────────────────────────────
+# RepairWise supports two backends:
+#   1. HuggingFace Transformers (default, GPU required)
+#   2. Ollama (local HTTP API, CPU/GPU, no Python GPU needed)
+#
+# To use Ollama:
+#   1. Install: https://ollama.ai
+#   2. Run: ollama pull gemma4:e2b
+#   3. Set env: REPAIRWISE_BACKEND=ollama
+#      Or:     OLLAMA_URL=http://localhost:11434
+
+import os as _os
+import urllib.request as _urllib_req
+import json as _json
+
+REPAIRWISE_BACKEND = _os.environ.get("REPAIRWISE_BACKEND", "transformers").lower()
+OLLAMA_URL = _os.environ.get("OLLAMA_URL", "http://localhost:11434")
+OLLAMA_MODEL = _os.environ.get("OLLAMA_MODEL", "gemma4:e2b")
+
+def _ollama_available() -> bool:
+    """Check if Ollama server is running."""
+    try:
+        req = _urllib_req.urlopen(f"{OLLAMA_URL}/api/tags", timeout=2)
+        return req.status == 200
+    except Exception:
+        return False
+
+def _ollama_chat(prompt: str, max_tokens: int = 220) -> str:
+    """Call Ollama /api/generate endpoint with Gemma 4."""
+    payload = _json.dumps({
+        "model": OLLAMA_MODEL,
+        "prompt": prompt,
+        "stream": False,
+        "options": {
+            "num_predict": max_tokens,
+            "temperature": 0.4,
+            "repeat_penalty": 1.12,
+            "stop": ["<end_of_turn>", "<start_of_turn>"],
+        }
+    }).encode()
+    try:
+        req = _urllib_req.Request(
+            f"{OLLAMA_URL}/api/generate",
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with _urllib_req.urlopen(req, timeout=60) as resp:
+            data = _json.loads(resp.read())
+            return data.get("response", "").replace("<end_of_turn>", "").strip()
+    except Exception as exc:
+        return ""
+
+def _ollama_stream(prompt: str, max_tokens: int = 220):
+    """Stream tokens from Ollama — yields text chunks."""
+    payload = _json.dumps({
+        "model": OLLAMA_MODEL,
+        "prompt": prompt,
+        "stream": True,
+        "options": {
+            "num_predict": max_tokens,
+            "temperature": 0.4,
+            "repeat_penalty": 1.12,
+            "stop": ["<end_of_turn>", "<start_of_turn>"],
+        }
+    }).encode()
+    try:
+        req = _urllib_req.Request(
+            f"{OLLAMA_URL}/api/generate",
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with _urllib_req.urlopen(req, timeout=120) as resp:
+            for line in resp:
+                if line:
+                    chunk = _json.loads(line)
+                    token = chunk.get("response", "")
+                    if token:
+                        yield token
+                    if chunk.get("done"):
+                        break
+    except Exception:
+        return
+
+# Detect active backend at startup
+_USE_OLLAMA = (REPAIRWISE_BACKEND == "ollama") or (
+    REPAIRWISE_BACKEND == "auto" and _ollama_available()
+)
+if _USE_OLLAMA:
+    print(f"✅ Ollama backend active: {OLLAMA_URL} | model: {OLLAMA_MODEL}")
+else:
+    print(f"ℹ️  Backend: transformers (HuggingFace)")
+
 
 REPAIRWISE_VERSION = "V17 Real Streaming Final"
 USE_GEMMA_TEXT_ENRICHMENT = True
@@ -118,7 +223,7 @@ TEXT_GEMMA_ENRICH_CATEGORIES = {
 }
 
 HIGH_RISK_CATEGORIES = {"scam_phishing", "battery_safety", "water_damage", "overheating_issue", "boot_issue", "data_recovery"}
-MEDIUM_RISK_CATEGORIES = {"charging_issue", "charging_port_issue", "screen_repair", "camera_issue", "update_issue", "faceid_touchid_issue"}
+MEDIUM_RISK_CATEGORIES = {"charging_issue", "charging_port_issue", "screen_repair", "camera_issue", "update_issue", "faceid_touchid_issue", "battery_drain", "audio_issue"}
 
 DANGER_WATER_TERMS = [
     "water", "liquid", "moisture", "corrosion", "rust", "salt water",
@@ -172,10 +277,32 @@ WIFI_PATTERNS = [r"\b(wifi|wi fi|router|dns)\b.*\b(no|not|problem|issue|disconne
 BLUETOOTH_PATTERNS = [r"\b(bluetooth|airpods|auriculares)\b.*\b(no|not|problem|issue|connect|conecta|empareja)\b"]
 STORAGE_PATTERNS = [r"\b(storage full|low storage|memory full|almacenamiento lleno|memoria llena|espai ple|emmagatzematge)\b"]
 UPDATE_PATTERNS = [r"\b(update failed|ios update|android update|actualizacion|actualització|stuck updating)\b"]
-BOOT_PATTERNS = [r"\b(bootloop|stuck logo|logo|not turning on|no enciende|no arranca|reinicia en bucle)\b"]
+BATTERY_DRAIN_PATTERNS = [
+    r"\b(battery.*(drain|drains|draining|dies fast|runs out|doesn.?t last|not lasting|last long|doent|doesnt|doenst))\b",
+    r"\b(battery.*(long|hold|enough|charge|go|last).*(not|no|dont|doesnt|doent|wont))\b",
+    r"\b(phone.*(battery|charge).*(dies|dead|gone|low).*(fast|quick|soon|hour|minute))\b",
+    r"\b(battery.*(percentage|life|health).*(low|bad|poor|worse))\b",
+    r"\b(se.*(gasta|agota|acaba).*(rapido|rápido|pronto|enseguida))\b",
+    r"\b(bateria.*(dura|aguanta|no.?dura|poca|poca duración))\b",
+    r"\b(battery.*(30|20|10).*(percent|%|minutes|hour))\b",
+]
+
+BOOT_PATTERNS = [
+    r"\b(bootloop|boot.?loop|stuck.?on.?logo|stuck.?logo|not turning on|won.?t turn on|wont turn on|won t turn on)\b",
+    r"\bno\s+(se\s+|me\s+)?enciende\b|\bno\s+(se\s+)?arranca\b|\bno\s+(se\s+)?prende\b|\breinicia en bucle\b|\bse queda en el logo\b|\batascado en logo\b",
+    r"\b(no s.?enc[eé]n|no se encen|no s encen|encen|no engega|no arrenca|es queda al logo|bloquejat al logo|no s.?encen)\b",
+    r"\b(nu porneste|blocat pe logo|reporneste singur|nu se opreste)\b",
+    r"(band hogaya|bandho gaya|on nahi|nahi chalu|nahi chalta|start nahi|logo pe atka|nahi chal raha)\b",
+    r"(بند ہوگیا|آن نہیں|لوگو پر|اسٹارٹ نہیں)",
+    r"(لا يعمل|علق عند الشعار|يعيد التشغيل|لا يفتح)",
+]
 SCREEN_PATTERNS = [r"\b(screen|pantalla|display|oled|lcd|green line|linea verde|línea verde|touch)\b.*\b(broken|cracked|rota|negra|black|line|flicker|no responde)\b"]
 CAMERA_PATTERNS = [r"\b(camera|camara|cámara|camera lens|lente)\b.*\b(black|negra|blurry|borrosa|focus|enfoque|shake|vibra)\b"]
-AUDIO_PATTERNS = [r"\b(speaker|microphone|mic|altavoz|microfono|micrófono|audio|sound|sonido)\b.*\b(no|not|problem|issue|funciona|hear|escucha)\b"]
+AUDIO_PATTERNS = [
+    r"\b(speaker|microphone|mic|altavoz|microfono|micrófono|audio|sound|sonido)\b.*\b(no|not|problem|issue|funciona|hear|escucha)\b",
+    r"\b(no (escucho|oigo|se escucha|se oye)|sonido (no|mal|roto)|audio (falla|no))\b",
+    r"\b(so no funciona|auricular|earpiece|earbud)\b",
+]
 FACEID_PATTERNS = [r"\b(face id|faceid|touch id|touchid|fingerprint|huella|biometric|biometrico|biometric)\b"]
 OVERHEAT_PATTERNS = [r"\b(overheating|phone hot|very hot|gets hot|se calienta|caliente|s'escalfa|fierbinte|burning smell|olor raro)\b"]
 DATA_PATTERNS = [r"\b(recover photos|recover data|data recovery|recuperar fotos|recuperar datos|dades|backup|whatsapp backup)\b"]
@@ -281,6 +408,17 @@ def is_vague_problem(text: str) -> bool:
     t = norm_text(text)
     if not t:
         return True
+    # Never treat these as vague — they have specific meaning
+    specific_signals = [
+        "encen", "enciende", "arranca", "prende", "engega", "start", "band hogaya", "hogaya",  # boot
+        "carga", "carrega", "charging",  # charging
+        "pantalla", "screen", "display",  # screen
+        "agua", "water", "mojado",  # water
+        "caliente", "hot", "escalfa",  # heat
+        "sim", "cobertura", "senyal", "senal", "signal",  # network
+    ]
+    if any(s in t for s in specific_signals):
+        return False
     if len(t.split()) <= 6 and re.search(r"\b(phone|movil|mobile|telefono|teléfono|mòbil|mobil)?\s*(no funciona|not working|doesnt work|doesn t work|va mal|problem|problema|no va)\b", t):
         return True
     return t in {"no funciona", "not working", "problema", "problem"}
@@ -308,6 +446,7 @@ def triage_issue(text: str) -> dict:
         ("wifi_issue", WIFI_PATTERNS, 0.92),
         ("bluetooth_issue", BLUETOOTH_PATTERNS, 0.92),
         ("overheating_issue", OVERHEAT_PATTERNS, 0.94),
+        ("battery_drain", BATTERY_DRAIN_PATTERNS, 0.93),
         ("storage_issue", STORAGE_PATTERNS, 0.90),
         ("update_issue", UPDATE_PATTERNS, 0.90),
         ("boot_issue", BOOT_PATTERNS, 0.90),
@@ -1088,7 +1227,19 @@ Base answer to preserve:
 """.strip()
 
 def call_gemma_text(prompt: str, max_new_tokens: int = 220) -> str:
-    LAST_GEMMA_TRACE.update({"called": True, "path": "text_enrichment", "raw": "", "fallback_used": False, "error": ""})
+    LAST_GEMMA_TRACE.update({"called": True, "path": "text_enrichment", "raw": "", "fallback_used": False, "error": "",
+                              "backend": "ollama" if _USE_OLLAMA else "transformers"})
+    # ── Ollama backend ────────────────────────────────────────────────────────
+    if _USE_OLLAMA:
+        try:
+            raw = _ollama_chat(prompt, max_tokens=max_new_tokens)
+            LAST_GEMMA_TRACE["raw"] = raw[:1200]
+            LAST_GEMMA_TRACE["path"] = "ollama_text_enrichment"
+            return raw
+        except Exception as exc:
+            LAST_GEMMA_TRACE["error"] = f"Ollama: {exc}"
+            # Fall through to transformers
+    # ── Transformers backend ──────────────────────────────────────────────────
     try:
         inputs = processor(text=prompt, return_tensors="pt")
         inputs = {k: v.to(model.device) for k, v in inputs.items() if hasattr(v, "to")}
@@ -1134,6 +1285,35 @@ TOOL_NEXT_STEP_LABELS = {
     "Romanian": "Pas ales de instrument",
 }
 
+TOOL_STEP_TRANSLATIONS = {
+    "Start with a forced restart and describe the exact symptom.": {
+        "Spanish": "Haz un reinicio forzado y describe el síntoma exacto.",
+        "Catalan": "Fes un reinici forçat i descriu el símptoma exacte.",
+        "Arabic": "أعد تشغيل الهاتف قسراً وصف العَرَض بدقة.",
+        "Romanian": "Fă un restart forțat și descrie simptomul exact.",
+        "Urdu": "فورسڈ ری اسٹارٹ کریں اور علامت بیان کریں۔",
+    },
+    "Do not open links or enter codes/card details.": {
+        "Spanish": "No abras enlaces ni introduzcas códigos ni datos de tarjeta.",
+        "Catalan": "No obris enllaços ni introdueixis codis ni dades de targeta.",
+        "Arabic": "لا تفتح الروابط ولا تدخل الرموز أو بيانات البطاقة.",
+        "Romanian": "Nu deschide linkuri și nu introduce coduri sau date de card.",
+        "Urdu": "لنک نہ کھولیں اور کوڈ یا کارڈ کی تفصیل نہ دیں۔",
+    },
+    "Stop charging immediately and let the phone cool down.": {
+        "Spanish": "Deja de cargarlo y deja que el teléfono se enfríe.",
+        "Catalan": "Deixa de carregar-lo i deixa que el telèfon es refredi.",
+        "Arabic": "أوقف الشحن فوراً واترك الهاتف يبرد.",
+        "Romanian": "Oprește încărcarea imediat și lasă telefonul să se răcească.",
+        "Urdu": "فوری چارجنگ بند کریں اور فون ٹھنڈا ہونے دیں۔",
+    },
+}
+
+def translate_tool_step(step: str, language: str) -> str:
+    """Translate common English tool steps to the response language."""
+    translations = TOOL_STEP_TRANSLATIONS.get(step, {})
+    return translations.get(language, step)
+
 def inject_tool_next_step(answer: str, tool_result: dict | None, language: str) -> str:
     """Connect function-calling output to the visible customer answer."""
     if not answer or not tool_result:
@@ -1143,16 +1323,17 @@ def inject_tool_next_step(answer: str, tool_result: dict | None, language: str) 
         return answer
 
     lang = normalize_language_name(language)
+    # Translate the tool step to the response language
+    step_translated = translate_tool_step(step, lang)
     label = TOOL_NEXT_STEP_LABELS.get(lang, "Tool-selected next step")
-    lines = answer.splitlines()
+    answer_lines = answer.splitlines()
 
-    # Put the tool step in line 3 ("What to do now") so the judge sees the
-    # tool result connected to the actual customer-facing answer.
-    if len(lines) >= 3:
-        lines[2] = lines[2].rstrip() + f" {label}: {step}"
-        return "\n".join(lines)
+    # Put the tool step in line 3 ("What to do now")
+    if len(answer_lines) >= 3:
+        answer_lines[2] = answer_lines[2].rstrip() + f" {label}: {step_translated}"
+        return "\n".join(answer_lines)
 
-    return answer + f"\n{label}: {step}"
+    return answer + f"\n{label}: {step_translated}"
 
 
 def build_high_risk_context_prompt(base_answer: str, user_text: str, triage: dict, docs: list, language: str) -> str:
@@ -1479,7 +1660,40 @@ Return EXACTLY 5 numbered lines:
 """.strip()
 
 def call_gemma_photo(prompt: str, image, max_new_tokens: int = 280) -> str:
-    LAST_GEMMA_TRACE.update({"called": True, "path": "multimodal_photo", "raw": "", "fallback_used": False, "error": ""})
+    LAST_GEMMA_TRACE.update({"called": True, "path": "multimodal_photo", "raw": "", "fallback_used": False, "error": "",
+                              "backend": "ollama" if _USE_OLLAMA else "transformers"})
+    # ── Ollama backend (text-only for photo — vision not yet in all Ollama builds) ─
+    if _USE_OLLAMA:
+        try:
+            # Ollama gemma4 supports vision via /api/generate with images
+            import base64 as _b64
+            from io import BytesIO as _BytesIO
+            buf = _BytesIO()
+            image.save(buf, format="JPEG", quality=85)
+            img_b64 = _b64.b64encode(buf.getvalue()).decode()
+            payload = _json.dumps({
+                "model": OLLAMA_MODEL,
+                "prompt": prompt,
+                "images": [img_b64],
+                "stream": False,
+                "options": {"num_predict": max_new_tokens, "temperature": 0.4, "repeat_penalty": 1.15,
+                            "stop": ["<end_of_turn>", "<start_of_turn>"]},
+            }).encode()
+            req = _urllib_req.Request(
+                f"{OLLAMA_URL}/api/generate",
+                data=payload,
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            with _urllib_req.urlopen(req, timeout=120) as resp:
+                data = _json.loads(resp.read())
+                raw = data.get("response", "").replace("<end_of_turn>", "").strip()
+                LAST_GEMMA_TRACE["raw"] = raw[:1200]
+                LAST_GEMMA_TRACE["path"] = "ollama_multimodal_photo"
+                return raw
+        except Exception as exc:
+            LAST_GEMMA_TRACE["error"] = f"Ollama photo: {exc}"
+    # ── Transformers backend ──────────────────────────────────────────────────
     try:
         inputs = processor(text=prompt, images=image, return_tensors="pt")
         inputs = {k: v.to(model.device) for k, v in inputs.items() if hasattr(v, "to")}
@@ -1550,6 +1764,143 @@ def build_contextual_user_text(user_text: str, conversation_history: list[dict] 
 
     return text, ""
 
+
+# ── Conversational follow-up questions ───────────────────────────────────────
+# When triage returns vague_problem or unknown, instead of a generic answer
+# the system asks a targeted diagnostic question. This creates real conversation.
+
+FOLLOWUP_QUESTIONS = {
+    "Spanish": {
+        "vague_problem": [
+            "Para ayudarte mejor, dime: ¿el móvil no enciende, no carga, tiene la pantalla rota, va lento o falla una app concreta?",
+            "Cuéntame más: ¿qué pasa exactamente? ¿Hay algún mensaje de error, se apaga solo, o no responde al tacto?",
+        ],
+        "unknown": [
+            "No he entendido bien el problema. ¿Puedes describir qué le pasa al móvil? Por ejemplo: no enciende, no carga, pantalla rota, va lento...",
+        ],
+        "boot_issue": [
+            "¿El móvil se queda en el logo y no pasa de ahí, o se reinicia solo continuamente? ¿Pasó después de una actualización o de forma repentina?",
+        ],
+        "charging_issue": [
+            "¿No carga nada de nada, carga muy lento, o solo carga si mueves el cable? ¿Has probado con otro cable y cargador?",
+        ],
+        "screen_repair": [
+            "¿La pantalla tiene la imagen pero el táctil no funciona, o la pantalla está completamente apagada? ¿Hay líneas o manchas?",
+        ],
+    },
+    "English": {
+        "vague_problem": [
+            "To help you better: does the phone not turn on, not charge, have a broken screen, run slowly, or is a specific app failing?",
+            "Can you tell me more? Is there an error message, does it shut down randomly, or does the screen not respond?",
+        ],
+        "unknown": [
+            "I didn't quite catch the issue. Can you describe what's happening? For example: won't turn on, not charging, cracked screen, running slow...",
+        ],
+        "boot_issue": [
+            "Is the phone stuck on the logo and won't go past it, or does it keep restarting in a loop? Did this happen after an update or suddenly?",
+        ],
+        "charging_issue": [
+            "Does it not charge at all, charge very slowly, or only charge when you wiggle the cable? Have you tried a different cable and charger?",
+        ],
+        "screen_repair": [
+            "Does the screen show an image but the touch doesn't work, or is the screen completely black? Are there any lines or dark spots?",
+        ],
+    },
+    "Catalan": {
+        "vague_problem": [
+            "Per ajudar-te millor, digues-me: el mòbil no s'encén, no carrega, té la pantalla trencada, va lent o falla una app concreta?",
+        ],
+        "unknown": [
+            "No he entès bé el problema. Pots descriure què li passa al mòbil?",
+        ],
+        "boot_issue": [
+            "El mòbil es queda al logo i no passa d'aquí, o es reinicia sol contínuament? Va passar després d'una actualització?",
+        ],
+        "charging_issue": [
+            "No carrega gens, carrega molt lent, o només carrega si mous el cable? Has provat amb un altre cable i carregador?",
+        ],
+    },
+    "Arabic": {
+        "vague_problem": [
+            "لمساعدتك بشكل أفضل، هل الهاتف لا يعمل، لا يشحن، الشاشة مكسورة، بطيء، أم تطبيق معين لا يعمل؟",
+        ],
+        "unknown": [
+            "لم أفهم المشكلة جيداً. هل يمكنك وصف ما يحدث بالضبط؟",
+        ],
+        "boot_issue": [
+            "هل الهاتف عالق عند الشعار ولا يتجاوزه، أم يعيد التشغيل باستمرار؟ هل حدث ذلك بعد تحديث أم فجأة؟",
+        ],
+    },
+    "Romanian": {
+        "vague_problem": [
+            "Ca să te ajut mai bine, spune-mi: telefonul nu pornește, nu se încarcă, are ecranul spart, merge lent sau o aplicație nu funcționează?",
+        ],
+        "unknown": [
+            "Nu am înțeles bine problema. Poți descrie ce se întâmplă cu telefonul?",
+        ],
+        "boot_issue": [
+            "Telefonul rămâne blocat pe logo și nu trece mai departe, sau repornește continuu singur? S-a întâmplat după o actualizare?",
+        ],
+    },
+    "Urdu": {
+        "vague_problem": [
+            "بہتر مدد کے لیے بتائیں: فون آن نہیں ہوتا، چارج نہیں ہوتا، اسکرین ٹوٹی ہے، سست چل رہا ہے، یا کوئی ایپ کام نہیں کر رہی؟",
+        ],
+        "unknown": [
+            "مجھے مسئلہ سمجھ نہیں آیا۔ کیا آپ بتا سکتے ہیں کہ فون میں کیا ہو رہا ہے؟",
+        ],
+        "boot_issue": [
+            "فون لوگو پر رک جاتا ہے اور آگے نہیں جاتا، یا بار بار ری اسٹارٹ ہوتا رہتا ہے؟ کیا یہ اپڈیٹ کے بعد ہوا؟",
+        ],
+    },
+}
+
+import random as _random
+
+def get_followup_question(category: str, language: str, history: list) -> str | None:
+    """Return a conversational follow-up question when more info is needed.
+    
+    Returns None if we already asked a question in the last turn (avoid loops).
+    """
+    lang = normalize_language_name(language)
+    questions = FOLLOWUP_QUESTIONS.get(lang, FOLLOWUP_QUESTIONS.get("English", {}))
+    options = questions.get(category, questions.get("vague_problem", []))
+    if not options:
+        return None
+    
+    # Don't ask follow-up if last assistant turn was already a question
+    if history:
+        last_assistant = ""
+        for turn in reversed(history):
+            a = turn.get("assistant") or turn.get("content") if turn.get("role") == "assistant" else ""
+            if a:
+                last_assistant = str(a)
+                break
+        if last_assistant.strip().endswith("?"):
+            return None  # Already asked, don't loop
+    
+    return _random.choice(options)
+
+def should_ask_followup(triage: dict, user_text: str, history: list) -> bool:
+    """Decide if we should ask a follow-up instead of giving a full answer."""
+    category = triage.get("category", "unknown")
+    urgency = triage.get("urgency", "LOW")
+    
+    # Never ask follow-up for HIGH urgency — always give immediate safety advice
+    if urgency == "HIGH":
+        return False
+    
+    # Ask follow-up for vague or unknown on first mention
+    if category in {"vague_problem", "unknown"}:
+        return True
+    
+    # Ask follow-up for MEDIUM categories if query is very short (< 5 words)
+    # and no history exists yet
+    if urgency == "MEDIUM" and len(norm_text(user_text).split()) <= 4 and not history:
+        return True
+    
+    return False
+
 def repairwise_answer(
     user_text: str,
     language: str = "Spanish",
@@ -1619,14 +1970,25 @@ def repairwise_answer(
 
     triage = triage_issue(text)
     docs = retrieve_knowledge(text, k=7, category=triage["category"], image_present=False)
-    answer = generate_text_answer(text, triage, docs[:4], lang)
 
-    if looks_bad_output(answer) or violates_requested_language(answer, lang) or answer_conflicts_with_category(answer, triage["category"], text):
-        LAST_GEMMA_TRACE["fallback_used"] = True
-        answer = safe_fallback_answer(text, triage, docs[:3], lang, image_present=False)
-        # Even fallback answers should expose the tool step if available.
-        tool_result = LAST_GEMMA_TRACE.get("function_calling", {}).get("tool_result", {})
-        answer = inject_tool_next_step(answer, tool_result, lang)
+    # ── Conversational follow-up ─────────────────────────────────────────────
+    # When triage is vague/unknown and urgency is not HIGH, ask a diagnostic
+    # question instead of giving a generic answer. This creates real dialogue.
+    followup = None
+    if should_ask_followup(triage, original_text, conversation_history or []):
+        followup = get_followup_question(triage["category"], lang, conversation_history or [])
+
+    if followup:
+        answer = followup
+        LAST_GEMMA_TRACE["path"] = "conversational_followup"
+        LAST_GEMMA_TRACE["called"] = False
+    else:
+        answer = generate_text_answer(text, triage, docs[:4], lang)
+        if looks_bad_output(answer) or violates_requested_language(answer, lang) or answer_conflicts_with_category(answer, triage["category"], text):
+            LAST_GEMMA_TRACE["fallback_used"] = True
+            answer = safe_fallback_answer(text, triage, docs[:3], lang, image_present=False)
+            tool_result = LAST_GEMMA_TRACE.get("function_calling", {}).get("tool_result", {})
+            answer = inject_tool_next_step(answer, tool_result, lang)
 
     meta = {
         "version": REPAIRWISE_VERSION,
@@ -1637,6 +1999,7 @@ def repairwise_answer(
         "language": lang,
         "effective_text": text,
         "history_used": bool(history_context),
+        "followup_asked": bool(followup),
         "gemma": dict(LAST_GEMMA_TRACE),
         "retrieval": {
             "semantic_embedding_available": bool(EMBEDDING_AVAILABLE),
