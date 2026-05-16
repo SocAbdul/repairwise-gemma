@@ -46,7 +46,13 @@ RepairWise Gemma is a **local-first multilingual AI** powered by fine-tuned Gemm
 https://huggingface.co/spaces/abdullahfasih/repairwise-gemma
 ```
 
-### Option 2 — Ollama (local laptop)
+### Option 2 — Kaggle Notebook (GPU T4, interactive chat)
+```
+https://www.kaggle.com/code/abdullahfasih/repairwise-gemma-gemma-4-good-hackathon-2026
+```
+Run all cells → scroll to last cell → interactive chat widget with real Gemma 4 streaming
+
+### Option 3 — Ollama (local laptop)
 ```bash
 ollama pull gemma4:e2b
 git clone https://github.com/SocAbdul/repairwise-gemma
@@ -55,14 +61,14 @@ pip install -r requirements.txt
 REPAIRWISE_BACKEND=ollama python app.py
 ```
 
-### Option 3 — llama.cpp (any device, no GPU)
+### Option 4 — llama.cpp (any device, no GPU)
 ```bash
 # Download: https://github.com/ggerganov/llama.cpp/releases
 llama-server.exe -m google_gemma-4-E2B-it-Q4_K_M.gguf --port 8080 -ngl 0
 REPAIRWISE_BACKEND=llamacpp python app.py
 ```
 
-### Option 4 — Transformers (GPU)
+### Option 5 — Transformers (GPU)
 ```bash
 git clone https://github.com/SocAbdul/repairwise-gemma
 cd repairwise-gemma
@@ -179,6 +185,7 @@ repairwise-gemma/
 | 🚀 Live deployment | https://huggingface.co/spaces/abdullahfasih/repairwise-gemma |
 | 🤗 Fine-tuned model | https://huggingface.co/abdullahfasih/repairwise-gemma4-e2b-lora |
 | 💻 GitHub | https://github.com/SocAbdul/repairwise-gemma |
+| 📓 Try on Kaggle (GPU) | https://www.kaggle.com/code/abdullahfasih/repairwise-gemma-gemma-4-good-hackathon-2026 |
 
 ---
 
