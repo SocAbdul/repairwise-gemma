@@ -154,7 +154,9 @@ def format_answer_with_visual(answer: str, meta: dict) -> str:
     }
 
     # Scam probability meter
-    if scam and scam.get("scam_probability", 0) >= 30:
+    # Show scam meter only if the message itself triggered scam signals
+    _user_msg_has_scam = scam and scam.get("scam_probability", 0) >= 30
+    if _user_msg_has_scam:
         prob    = scam["scam_probability"]
         filled  = int(prob / 10)
         color   = "🟥" if prob >= 70 else "🟧" if prob >= 40 else "🟨"
@@ -178,27 +180,54 @@ def format_answer_with_visual(answer: str, meta: dict) -> str:
         prefix += "\n---\n"
 
     # Risk banner in user's language
-    if urg == "HIGH":
+    # For scam categories: only show danger banner if the message itself is suspicious
+    # (scam_score > 20). If score is 0, the user is likely in a safe follow-up.
+    _scam_cats_banner = {"scam_phishing", "scam_clicked_link", "scam_data_entered"}
+    _show_banner = urg == "HIGH"
+    if cat in _scam_cats_banner and scam and scam.get("scam_probability", 0) == 0:
+        _show_banner = False  # user's message itself is not a scam — don't alarm them
+    if _show_banner:
         cat_banners = RISK_BANNERS.get(cat, {})
         banner = cat_banners.get(lang, cat_banners.get("English", f"🔴 **HIGH RISK**"))
         if not banner:
             banner = f"🔴 **HIGH RISK** — Immediate action required"
         prefix = f"{banner}\n\n" + prefix
 
-    return prefix + answer
+    # Add response time badge if available
+    rt = meta.get("response_time_s")
+    if rt and rt > 0:
+        rt_label = f"⚡ {rt:.1f}s" if rt < 10 else f"⏱️ {rt:.0f}s"
+        suffix = f"\n\n<sub>{rt_label} · RepairWise Gemma 4</sub>"
+    else:
+        suffix = ""
+
+    # Emergency bank contacts for scam_data_entered
+    if triage.get("category") == "scam_data_entered":
+        emergency_contacts = {
+            "Spanish":  "\n\n> 📞 **Bancos españoles 24h:** BBVA `900 102 801` · Santander `915 123 123` · CaixaBank `900 40 40 90` · Sabadell `902 323 555`\n> 🚨 **INCIBE:** `017` (gratis, 9h-21h) · Denuncia online: `policia.es`",
+            "English":  "\n\n> 📞 **Emergency:** Call your bank's 24h fraud line immediately · UK: Action Fraud `0300 123 2040`",
+            "Catalan":  "\n\n> 📞 **Bancs d'urgència 24h:** BBVA `900 102 801` · Santander `915 123 123` · CaixaBank `900 40 40 90`\n> 🚨 **INCIBE:** `017` (gratis) · Denuncia: `mossos.gencat.cat`",
+            "Arabic":   "\n\n> 📞 **اتصل بالبنك فوراً** على خط الاحتيال 24 ساعة · **INCIBE:** `017` (مجاني)",
+            "Romanian": "\n\n> 📞 **Sună banca ACUM** pe linia de urgențe 24h · **CERT-RO:** `1911`",
+            "Urdu":     "\n\n> 📞 **ابھی بینک کو کال کریں** — 24 گھنٹے فراڈ لائن · **FIA:** `9911`",
+        }
+        ec = emergency_contacts.get(lang, emergency_contacts["English"])
+        suffix = ec + suffix
+
+    return prefix + answer + suffix
 
 
 def _make_status_bubble(text: str) -> str:
-    """Format a __STATUS__: message as a styled progress indicator."""
+    """Format a __STATUS__: message as a clean pipeline progress display."""
     lines = text.replace("__STATUS__:", "").strip().split("\n")
     formatted = []
     for line in lines:
         line = line.strip()
         if not line:
             continue
-        formatted.append(f"  {line}")
+        formatted.append(line)
     body = "\n".join(formatted)
-    return f"```\n{body}\n```"
+    return f"**🔄 Pipeline en ejecución...**\n```\n{body}\n```"
 
 
 def repairwise_chat(user_text, language, image, history):
@@ -241,6 +270,8 @@ def repairwise_chat(user_text, language, image, history):
     meta   = {}
     panel_live = "⏳ Procesando..."
 
+    import time as _t_chat
+    _chat_start = _t_chat.time()
     try:
         for chunk, is_final, meta in repairwise_stream(
             user_text, language=lang, image=pil_image, conversation_history=conv_history
@@ -262,6 +293,10 @@ def repairwise_chat(user_text, language, image, history):
     except Exception as e:
         answer = f"Error: {str(e)[:200]}"
         meta = {}
+
+    # Add response time to meta for format_answer_with_visual
+    if meta:
+        meta["response_time_s"] = _t_chat.time() - _chat_start
 
     triage = meta.get("triage", {})
 
@@ -328,10 +363,20 @@ def clear_chat():
 
 # ── Gradio UI ─────────────────────────────────────────────────────────────────
 DEMO_BANNER = (
-    "\n\n> ⚠️ **DEMO MODE** — No GPU available. Full triage + RAG pipeline runs. "
-    "Responses use safe templates. For live Gemma 4 generation, see the [Kaggle notebook](https://kaggle.com)."
+    "\n\n> ⚠️ **DEMO MODE (HF Free Tier)** — Full triage + RAG + function calling pipeline active. "
+    "Responses use safety-validated templates (same pipeline as Gemma 4 generation). "
+    "For live Gemma 4 token streaming, run locally with `REPAIRWISE_BACKEND=ollama` or see the [Kaggle notebook](https://kaggle.com)."
     if DEMO_MODE else ""
 )
+
+# Pre-baked demo examples for HF Space showcase (shown in placeholder)
+DEMO_EXAMPLES = [
+    ["Me ha llegado un SMS del banco con un link y me pide la tarjeta y el PIN.", "Spanish"],
+    ["My phone battery is swollen and the screen is lifting.", "English"],
+    ["مجھے بینک کا مشکوک پیغام آیا جس میں PIN مانگا گیا۔", "Urdu"],
+    ["El meu mòbil no s'encén i es queda al logo.", "Catalan"],
+    ["بطارية هاتفي منتفخة والشاشة ترتفع عن الجسم.", "Arabic"],
+]
 
 CSS = """
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
@@ -641,6 +686,15 @@ with gr.Blocks(
                             "See Kaggle notebook for Gemma 4 thinking mode."
                         ),
                     )
+
+    # ── EXAMPLES (helps judges try scenarios instantly) ──────────────────
+    if DEMO_MODE:
+        gr.Examples(
+            examples=DEMO_EXAMPLES,
+            inputs=[txt_input, lang_drop],
+            label="💡 Try these scenarios (click to load)",
+            examples_per_page=5,
+        )
 
     # ── FOOTER ────────────────────────────────────────────────────────────
     gr.HTML("""
