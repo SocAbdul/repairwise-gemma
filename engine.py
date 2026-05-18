@@ -11,6 +11,7 @@
 
 import re
 import json
+import torch
 import unicodedata
 from typing import Optional, Any
 import numpy as np
@@ -66,18 +67,31 @@ def _ollama_available() -> bool:
         return False
 
 def _ollama_chat(prompt: str, max_tokens: int = 220) -> str:
-    """Call Ollama /api/generate endpoint with Gemma 4."""
-    payload = _json.dumps({
+    """Call Ollama /api/generate endpoint with Gemma 4.
+    Uses num_predict=-1 (unlimited) because Gemma 4 thinking mode
+    consumes all tokens if capped — content comes after thinking.
+    """
+    # num_predict budget: thinking tokens (~300) + response (~250) = 600 needed on CPU.
+    # We add 200 buffer. If OLLAMA_THINKING=false, all tokens go to actual response.
+    _think_disabled = _os.environ.get("OLLAMA_THINKING", "false").lower() != "true"
+    _predict = max(max_tokens + 500, 1024)  # 1024 min: thinking(~500) + response(~300) + buffer
+    _body = {
         "model": OLLAMA_MODEL,
         "prompt": prompt,
         "stream": False,
         "options": {
-            "num_predict": max_tokens,
-            "temperature": 0.4,
-            "repeat_penalty": 1.12,
+            "num_predict": _predict,
+            "num_ctx": 1536,
+            "temperature": 0.6,          # restored for quality
+            "repeat_penalty": 1.1,
             "stop": ["<end_of_turn>", "<start_of_turn>"],
         }
-    }).encode()
+    }
+    if _think_disabled:
+        _body["options"]["think"] = False  # Ollama 0.7+
+    if "REPAIRWISE_SYSTEM_PROMPT" in globals():
+        _body["system"] = REPAIRWISE_SYSTEM_PROMPT
+    payload = _json.dumps(_body).encode()
     try:
         req = _urllib_req.Request(
             f"{OLLAMA_URL}/api/generate",
@@ -85,7 +99,8 @@ def _ollama_chat(prompt: str, max_tokens: int = 220) -> str:
             headers={"Content-Type": "application/json"},
             method="POST",
         )
-        with _urllib_req.urlopen(req, timeout=60) as resp:
+        _timeout = int(_os.environ.get('OLLAMA_TIMEOUT', '60'))  # default 60s; set longer if needed
+        with _urllib_req.urlopen(req, timeout=_timeout) as resp:
             data = _json.loads(resp.read())
             return data.get("response", "").replace("<end_of_turn>", "").strip()
     except Exception as exc:
@@ -98,10 +113,12 @@ def _ollama_stream(prompt: str, max_tokens: int = 220):
         "prompt": prompt,
         "stream": True,
         "options": {
-            "num_predict": max_tokens,
-            "temperature": 0.4,
-            "repeat_penalty": 1.12,
-            "stop": ["<end_of_turn>", "<start_of_turn>"],
+            "num_predict": 600,          # capped for streaming — thinking overhead included
+            "num_ctx": 1536,
+            "temperature": 0.2,
+            "repeat_penalty": 1.1,
+            "think": False,             # disable extended thinking for streaming speed
+            "stop": ["<end_of_turn>", "<start_of_turn>", "6.", "6)"],
         }
     }).encode()
     try:
@@ -304,11 +321,31 @@ CATEGORY_PRIORITY = [
     "audio_issue", "data_recovery", "privacy_repair", "warranty"
 ]
 
+# ── System persona injected into Ollama/llama.cpp system field ────────────────
+REPAIRWISE_SYSTEM_PROMPT = (
+    "You are RepairWise Gemma — a world-class phone repair expert and digital safety guardian. "
+    "Your mission: protect vulnerable people — elderly users losing savings to SMS scams, "
+    "immigrants who struggle to describe technical problems, people in rural areas with no repair "
+    "shop nearby. Every response could save money, data, or prevent a fire. "
+    "Treat every query as if a worried grandmother is asking you in person.\n\n"
+    "Tone: HIGH risk → urgent language, make them act NOW. "
+    "LOW/MEDIUM → reassuring, practical, empower them to self-resolve.\n"
+    "Never use jargon without explaining it. Never be cold. "
+    "Always respond in the same language as the customer."
+)
+
 TEXT_GEMMA_ENRICH_CATEGORIES = {
+    # Hardware & software
     "charging_issue", "charging_port_issue", "sim_network_issue", "network_issue",
     "app_issue", "wifi_issue", "bluetooth_issue", "camera_issue", "screen_repair",
     "storage_issue", "update_issue", "faceid_touchid_issue", "speaker_microphone_issue",
-    "audio_issue", "online_service_issue", "software_issue"
+    "audio_issue", "online_service_issue", "software_issue",
+    # Safety (battery_safety excluded — Rule 1 keeps it template-only)
+    "water_damage", "overheating_issue", "boot_issue", "data_recovery",
+    # Scam
+    "scam_phishing", "scam_clicked_link", "scam_data_entered",
+    # Other
+    "warranty", "privacy_repair", "battery_drain",
 }
 
 HIGH_RISK_CATEGORIES = {"scam_phishing", "battery_safety", "water_damage", "overheating_issue", "boot_issue", "data_recovery"}
@@ -332,6 +369,10 @@ DANGER_SCAM_TERMS = [
     "banc", "targeta", "codi", "enllas", "enlac",
     "بینک", "کارڈ", "کوڈ", "رابطہ", "بنك", "بطاقة", "رمز", "رابط",
     "banca", "card", "cod", "link",
+    # Data-entered signals (allow standalone detection without prior scam context)
+    "mis datos", "datos personales", "mis datos personales",
+    "puse mis datos", "he puesto mis datos", "di mis datos",
+    "puse la tarjeta", "introduje mis datos",
     # Clicked phishing link — various forms and typos
     "abri el enlace", "abrí el enlace", "abri el link",
     "he abierto", "abierto el enlace", "abierto el link",
@@ -501,7 +542,7 @@ def strip_accents(text: str) -> str:
 
 def norm_text(text: str) -> str:
     text = strip_accents(text).lower()
-    text = re.sub(r"[^a-z0-9\u0600-\u06FF\s]+", " ", text)
+    text = re.sub(r"[^a-z0-9\u0600-\u06FF\u0750-\u077F\uFB50-\uFDFF\uFE70-\uFEFF\s]+", " ", text)
     return re.sub(r"\s+", " ", text).strip()
 
 def contains_any(text: str, terms: list[str]) -> bool:
@@ -545,12 +586,16 @@ def triage_issue(text: str, conversation_history: list | None = None) -> dict:
     if contains_any(text, DANGER_SCAM_TERMS):
         t_n = norm_text(text)
         # Data entered → EMERGENCY escalation
-        entered_words = ["puse", "pusé", "puse mis datos", "puse la tarjeta",
-                         "puse el codigo", "introduje", "rellené", "entered",
-                         "gave", "provided", "put my", "metí", "meti",
-                         "he puesto", "puse datos", "puse el pin",
-                         "he dado", "di mis datos", "put in my card",
-                         "put my card", "filled in"]
+        entered_words = [
+            "puse", "pusé", "introduje", "metí", "meti", "he puesto", "he dado",
+            "di mis", "he introducido", "he metido", "rellené", "puse mis",
+            "puse la tarjeta", "puse el pin", "puse el codigo", "puse datos",
+            "mis datos", "datos personales", "mis datos personales",
+            "entered", "gave", "provided", "put my", "put in my card",
+            "put my card", "filled in", "i entered", "i gave", "i provided",
+            "he osat", "he introduit", "am introdus", "am dat datele",
+            "أدخلت", "أعطيت", "ڈالا", "دیا",
+        ]
         if any(w in t_n for w in entered_words):
             return {"urgency": "HIGH", "category": "scam_data_entered",
                     "reason": "EMERGENCY: User entered data on phishing site.",
@@ -584,13 +629,29 @@ def triage_issue(text: str, conversation_history: list | None = None) -> dict:
         if inherited:
             # Special case: clicked phishing link gets specific category
             t_norm = norm_text(text)
-            if inherited.get("category") in {"scam_phishing", "scam_clicked_link"}:
-                clicked = any(x in t_norm for x in [
-                    "abri", "clic", "click", "pulse", "entre",
-                    "pinche", "open", "hice", "abrí", "opened", "clicked"
-                ])
-                if clicked:
+            if inherited.get("category") in {"scam_phishing", "scam_clicked_link", "scam_data_entered"}:
+                # EMERGENCY: user entered personal data on phishing site
+                data_entered_signals = [
+                    "puse", "pusé", "introduje", "metí", "meti", "he puesto", "he dado",
+                    "di mis", "he introducido", "he metido", "rellené",
+                    "datos personales", "mis datos", "puse mis",
+                    "entered", "gave", "provided", "filled in", "put in",
+                    "أدخلت", "ڈالا",
+                ]
+                if any(s in t_norm for s in data_entered_signals):
+                    inherited["category"] = "scam_data_entered"
+                    inherited["urgency"] = "HIGH"
+                    inherited["reason"] = "EMERGENCY: User entered personal data on phishing site."
+                    inherited["method"] = "conversation_scam_data_entered"
+                    return inherited
+                # Upgrade: user clicked the link
+                clicked_signals = [
+                    "abri", "abrí", "clic", "click", "pulse", "pulsé",
+                    "pinche", "open", "hice clic", "opened", "clicked",
+                ]
+                if any(s in t_norm for s in clicked_signals):
                     inherited["category"] = "scam_clicked_link"
+                    inherited["urgency"] = "HIGH"
             return inherited
 
     checks = [
@@ -680,7 +741,7 @@ def try_init_semantic_retriever():
     for candidate in build_embedding_model_candidates():
         try:
             # Skip non-existing local candidates.
-            if candidate.startswith("/kaggle/input") and not os.path.exists(candidate):
+            if candidate.startswith("/kaggle/input") and not _os.path.exists(candidate):
                 continue
             device = "cuda" if "torch" in globals() and torch.cuda.is_available() else "cpu"
             EMBEDDER = SentenceTransformer(candidate, device=device)
@@ -1371,8 +1432,9 @@ def detect_scam_signals(scam_probability: int, signals_found: list,
 def select_tool_for_category(category: str, user_text: str) -> str:
     """Select the most appropriate tool based on triage category."""
     text = user_text.lower()
-    if category in {"scam_phishing"} or any(
-        x in text for x in ["sms", "banco", "bank", "phishing", "link", "enlace"]
+    if category in {"scam_phishing", "scam_clicked_link", "scam_data_entered"} or any(
+        x in text for x in ["sms", "banco", "bank", "phishing", "link", "enlace",
+                             "estafa", "scam", "tarjeta", "datos personales"]
     ):
         return "detect_scam_signals"
     if category in {"screen_repair", "battery_safety", "water_damage",
@@ -1490,19 +1552,19 @@ def call_gemma_function_router(user_text: str, triage: dict, docs: list, languag
     the tool schema directly. If not, we fall back to a JSON tool-call prompt.
     """
     trace = LAST_GEMMA_TRACE["function_calling"]
+    # Select the best tool for this query category (define early for trace)
+    selected_tool_name = select_tool_for_category(triage.get("category",""), user_text)
     trace.update({
         "attempted": True,
         "native_tools_passed": False,
-        "tool_name": selected_tool_name if "selected_tool_name" in dir() else "repairwise_decide_escalation",
+        "tool_name": selected_tool_name,
         "tool_args": {},
         "tool_result": {},
         "raw": "",
         "error": "",
     })
 
-    # Select the best tool for this query category
-    selected_tool_name = select_tool_for_category(triage.get("category",""), user_text)
-    trace["tool_name"] = selected_tool_name
+    # (tool already selected above)
 
     if not USE_GEMMA_FUNCTION_CALLING:
         args = deterministic_args_for_tool(selected_tool_name, user_text, triage)
@@ -1674,30 +1736,45 @@ def clean_streamed_answer(raw: str) -> str:
 
 
 def build_text_enrichment_prompt(base_answer: str, user_text: str, triage: dict, docs: list, language: str) -> str:
+    """Generate directly from the customer message + RAG context.
+    Does NOT ask Gemma to paraphrase the template — system persona is in REPAIRWISE_SYSTEM_PROMPT
+    (Ollama system field). Optimized for speed: no CoT prefix, think:false in Ollama."""
     lang = normalize_language_name(language)
     label_instruction = LANGUAGE_INSTRUCTIONS.get(lang, LANGUAGE_INSTRUCTIONS["Spanish"])
+    labels = LABELS.get(lang, LABELS["Spanish"])
     context = "\n".join(f"[{d.get('id')}] {d.get('text','')[:350]}" for d in docs[:3])
-    return f"""
-You are RepairWise AI, an offline assistant for a real mobile phone repair shop.
-{label_instruction}
+    category = triage.get("category", "unknown")
+    urgency  = triage.get("urgency", "LOW")
+    risk     = risk_for_category(category, triage)
+    recommendation = get_recommendation(category, lang)
+    matching_ids = [d.get("id","?") for d in docs[:3] if d.get("category") == category]
+    other_ids    = [d.get("id","?") for d in docs[:3] if d.get("category") != category]
+    sources = ", ".join((matching_ids or other_ids)[:3])
+    # CoT prefix removed: Gemma4 E2B reasons well without it.
+    # Explicit "Think step by step" doubles thinking token count → 2x slower on CPU.
+    # The system prompt (REPAIRWISE_SYSTEM_PROMPT) already guides tone and quality.
 
-Your job is NOT to invent a new diagnosis. Improve the wording of the base answer using only the local context.
-Keep the same risk level and the same 5-line numbered format.
-Do not add prices. Do not mention motherboard/board/internal damage unless the context explicitly says it.
-Return exactly 5 numbered lines.
+    return f"""{label_instruction}
 
-Customer message:
-{user_text}
+Customer message: \"{user_text}\"
+Issue: {category} | Risk: {risk}
 
-Detected category:
-{triage.get('category')}
-
-Local context:
+Repair knowledge base (use this — do not invent facts):
 {context}
 
-Base answer to preserve:
+Analyze THIS customer's SPECIFIC situation. Reference what they described.
+Rules: no prices, no jargon without explanation, no board/motherboard damage unless the knowledge base explicitly says so.
+Do NOT copy the template wording below — write your own response.
+
+Structure reference only:
 {base_answer}
-""".strip()
+
+Return EXACTLY 5 numbered lines:
+1. {labels[0]}: [specific diagnosis for their exact case]
+2. {labels[1]}: {risk} ⚡ Recomendación: {recommendation}
+3. {labels[2]}: [3-5 concrete steps for their situation]
+4. {labels[3]}: [precise condition for professional help]
+5. {labels[4]}: [{sources}]""".strip()
 
 def call_gemma_text(prompt: str, max_new_tokens: int = 220) -> str:
     LAST_GEMMA_TRACE.update({"called": True, "path": "text_enrichment", "raw": "", "fallback_used": False, "error": "",
@@ -1859,6 +1936,21 @@ Safety base answer:
 
 def call_gemma_high_risk_context(prompt: str, max_new_tokens: int = 64) -> str:
     LAST_GEMMA_TRACE.update({"called": True, "path": "high_risk_context", "raw": "", "fallback_used": False, "error": ""})
+    # Ollama path — call E2B for a one-sentence context note
+    if _USE_OLLAMA:
+        try:
+            raw = _ollama_chat(prompt, max_tokens=max_new_tokens)
+            LAST_GEMMA_TRACE["raw"] = raw[:400]
+            return raw
+        except Exception as exc:
+            LAST_GEMMA_TRACE["error"] = f"Ollama high_risk: {exc}"
+    if _USE_LLAMACPP:
+        try:
+            raw = _llamacpp_chat(prompt, max_tokens=max_new_tokens)
+            LAST_GEMMA_TRACE["raw"] = raw[:400]
+            return raw
+        except Exception as exc:
+            LAST_GEMMA_TRACE["error"] = f"llama.cpp high_risk: {exc}"
     try:
         inputs = processor(text=prompt, return_tensors="pt")
         inputs = {k: v.to(model.device) for k, v in inputs.items() if hasattr(v, "to")}
@@ -1938,36 +2030,37 @@ def generate_text_answer(user_text: str, triage: dict, docs: list, language: str
         tool_result = dispatch_tool(_sel, deterministic_escalation_args(user_text, triage))
         LAST_GEMMA_TRACE["function_calling"].update({
             "attempted": False,
-            "tool_name": selected_tool_name if "selected_tool_name" in dir() else "repairwise_decide_escalation",
+            "tool_name": _sel,
             "tool_args": deterministic_escalation_args(user_text, triage),
             "tool_result": tool_result,
         })
 
     base = inject_tool_next_step(base, tool_result, lang)
 
-    # Route A: LOW/MEDIUM text enrichment can replace the base answer only if it passes all guards.
-    if (
-        USE_GEMMA_TEXT_ENRICHMENT
-        and category in TEXT_GEMMA_ENRICH_CATEGORIES
-        and urgency != "HIGH"
-        and "processor" in globals()
-        and "model" in globals()
-    ):
+    # Route A: Full Gemma generation for all supported categories and urgency levels.
+    # battery_safety excluded via Rule 1. Guards → safe template fallback on bad output.
+    _backend_ok = _USE_OLLAMA or _USE_LLAMACPP or (
+        "model" in globals() and model is not None
+    )
+    if USE_GEMMA_TEXT_ENRICHMENT and category in TEXT_GEMMA_ENRICH_CATEGORIES and _backend_ok:
+        max_tok = 350 if urgency == "HIGH" else 280
         prompt = build_text_enrichment_prompt(base, user_text, triage, docs, lang)
-        raw = call_gemma_text(prompt)
-        # Preserve function-calling trace even after the enrichment call overwrites path/raw.
+        raw = call_gemma_text(prompt, max_new_tokens=max_tok)
         LAST_GEMMA_TRACE["function_calling"]["tool_result"] = tool_result
+        LAST_GEMMA_TRACE["path"] = "gemma_direct_generation"
         if raw and not looks_bad_output(raw) and not violates_requested_language(raw, lang) and not answer_conflicts_with_category(raw, category, user_text):
             return inject_tool_next_step(raw[:1800], tool_result, lang)
+        # Guard rejected → safe template is the automatic fallback
         LAST_GEMMA_TRACE["fallback_used"] = True
+        LAST_GEMMA_TRACE["path"] = "gemma_direct_generation_fallback"
 
-    elif USE_GEMMA_TEXT_ENRICHMENT and category in TEXT_GEMMA_ENRICH_CATEGORIES and urgency != "HIGH":
+    elif USE_GEMMA_TEXT_ENRICHMENT and category in TEXT_GEMMA_ENRICH_CATEGORIES:
         LAST_GEMMA_TRACE.update({
             "called": True,
             "path": "text_enrichment_unavailable",
             "raw": "",
             "fallback_used": True,
-            "error": "Gemma model not loaded in this runtime."
+            "error": "No backend available (no Ollama, llama.cpp, or GPU model)."
         })
         LAST_GEMMA_TRACE["function_calling"]["tool_result"] = tool_result
 
@@ -2013,19 +2106,41 @@ def describe_image_with_gemma(image, language: str = "English") -> str:
 
     if image is None:
         return ""
-    if not ("processor" in globals() and "model" in globals()):
-        LAST_GEMMA_TRACE["image_description"].update({
-            "called": True,
-            "raw": "",
-            "error": "Gemma model not loaded in this runtime."
-        })
-        return ""
 
     prompt = (
         "You are helping a phone repair assistant. Describe only what is visibly shown in this phone photo or screenshot "
         "in one cautious sentence. Do not diagnose hidden internal damage. Mention if it looks like a screenshot, cracked screen, "
         "charging port, water/corrosion, swollen battery/lifted screen, camera lens issue, app error, SMS scam, or unclear image."
     )
+    # Ollama vision path
+    if _USE_OLLAMA:
+        try:
+            import base64 as _b64_desc
+            from io import BytesIO as _BytesIO_desc
+            buf = _BytesIO_desc()
+            image.save(buf, format="JPEG", quality=75)
+            img_b64 = _b64_desc.b64encode(buf.getvalue()).decode()
+            raw = ""
+            payload = _json.dumps({
+                "model": OLLAMA_MODEL, "prompt": prompt,
+                "images": [img_b64], "stream": False,
+                "options": {"num_predict": 80, "temperature": 0.3},
+            }).encode()
+            req = _urllib_req.Request(f"{OLLAMA_URL}/api/generate", data=payload,
+                headers={"Content-Type": "application/json"}, method="POST")
+            with _urllib_req.urlopen(req, timeout=60) as resp:
+                raw = _json.loads(resp.read()).get("response", "").replace("<end_of_turn>", "").strip()
+            if raw:
+                LAST_GEMMA_TRACE["image_description"].update({"called": True, "raw": raw[:300], "error": ""})
+                LAST_GEMMA_TRACE["called"] = True
+                return raw[:300]
+        except Exception as exc:
+            LAST_GEMMA_TRACE["image_description"]["error"] = f"Ollama vision: {exc}"
+    if not ("processor" in globals() and "model" in globals() and model is not None):
+        LAST_GEMMA_TRACE["image_description"].update({
+            "called": True, "raw": "", "error": "No backend available for image description."
+        })
+        return ""
     try:
         inputs = processor(text=prompt, images=image, return_tensors="pt")
         inputs = {k: v.to(model.device) for k, v in inputs.items() if hasattr(v, "to")}
@@ -2106,13 +2221,13 @@ def photo_docs_for_category(repair_category: str, visual_category: str | None = 
 
     # Category relevance boost — matching docs rank higher, off-category penalized
     # Treat scam sub-categories as scam_phishing for RAG purposes
-    rag_category = "scam_phishing" if category == "scam_clicked_link" else category
+    rag_category = "scam_phishing" if repair_category == "scam_clicked_link" else repair_category
     if rag_category and docs and rag_category not in {"unknown", "vague_problem", "photo_unclear"}:
         matching = []
         others = []
         for _d in docs:
             _d = dict(_d)
-            if _d.get("category") == category:
+            if _d.get("category") == repair_category:
                 _d["score"] = float(_d.get("score", 0)) * 2.0
                 matching.append(_d)
             else:
@@ -2293,13 +2408,15 @@ def build_contextual_user_text(user_text: str, conversation_history: list[dict] 
     if short_followup or lacks_signal:
         recent = []
         for turn in history[-3:]:
-            u = turn.get("user") or turn.get("customer") or ""
-            a = turn.get("assistant") or ""
-            if u:
-                recent.append(f"Previous customer: {u}")
-            if a:
-                # Keep assistant context short to avoid prompt bloat.
-                recent.append(f"Previous RepairWise summary: {a.splitlines()[0][:160]}")
+            role    = turn.get("role", "")
+            content = turn.get("content") or turn.get("user") or turn.get("customer") or ""
+            if not content and turn.get("assistant"):
+                content = turn.get("assistant")
+                role = "assistant"
+            if role in ("user", "customer", "") and content:
+                recent.append(f"Previous customer: {content[:200]}")
+            elif role == "assistant" and content:
+                recent.append(f"Previous RepairWise summary: {content.splitlines()[0][:160]}")
         context = "\n".join(recent[-4:])
         if context:
             effective = f"{context}\nCurrent customer message: {text}"
@@ -2608,17 +2725,22 @@ def _call_e4b_via_ollama(prompt: str, max_tokens: int = 450) -> str:
     Falls back to E2B if E4B is not available.
     """
     # Try E4B first
-    payload = _json.dumps({
+    _e4b_body = {
         "model": OLLAMA_MODEL_E4B,
         "prompt": prompt,
         "stream": False,
         "options": {
-            "num_predict": max_tokens,
-            "temperature": 0.35,   # slightly lower for E4B — more reliable
+            "num_predict": max_tokens + 200,  # buffer for any thinking overhead
+            "num_ctx": 2048,
+            "temperature": 0.2,
             "repeat_penalty": 1.10,
-            "stop": ["<end_of_turn>", "<start_of_turn>"],
+            "stop": ["<end_of_turn>", "<start_of_turn>", "6.", "6)"],
+            "think": False,  # disable extended thinking for speed
         }
-    }).encode()
+    }
+    if "REPAIRWISE_SYSTEM_PROMPT" in globals():
+        _e4b_body["system"] = REPAIRWISE_SYSTEM_PROMPT
+    payload = _json.dumps(_e4b_body).encode()
     try:
         req = _urllib_req.Request(
             f"{OLLAMA_URL}/api/generate",
@@ -2726,19 +2848,20 @@ def select_model_tier(complexity: dict, triage: dict, has_image: bool,
     category = triage.get("category", "unknown")
     factors = []
 
-    # Rule 1: Safety critical → always template (fastest, most reliable)
-    if urgency == "HIGH" and category in {"battery_safety", "water_damage"}:
-        reason = "HIGH urgency safety — template guarantees immediate response"
+    # Rule 1: Swollen battery ONLY → always template (fire/explosion risk)
+    # water_damage removed — Gemma can safely advise "turn off, don't charge"
+    if urgency == "HIGH" and category == "battery_safety":
+        reason = "Swollen battery — template guarantees correct safety response"
         LAST_ROUTER_DECISION.update({
             "selected_tier": "template",
             "reason": reason,
             "complexity_score": score,
-            "factors": complexity["factors"] + ["safety_override"],
+            "factors": complexity["factors"] + ["battery_safety_override"],
         })
         return "template"
 
     # Rule 2: No model available → template
-    if demo_mode or model is None:
+    if demo_mode or (model is None and not _USE_OLLAMA and not _USE_LLAMACPP):
         reason = "No GPU/model available — template fallback"
         LAST_ROUTER_DECISION.update({
             "selected_tier": "template",
@@ -3228,7 +3351,7 @@ def repairwise_answer(
 
     # ── Scam confidence score (injected for phishing queries) ─────────────────
     scam_score_data = None
-    if triage.get("category") == "scam_phishing":
+    if triage.get("category") in {"scam_phishing", "scam_clicked_link", "scam_data_entered"}:
         scam_score_data = compute_scam_score(original_text)
 
     # ── Cactus: Intelligent model routing ────────────────────────────────────
@@ -3273,10 +3396,9 @@ def repairwise_answer(
             tool_result = LAST_GEMMA_TRACE.get("function_calling", {}).get("tool_result", {})
             answer = inject_tool_next_step(answer, tool_result, lang)
 
-    # Prepend scam score to answer if phishing detected
-    if scam_score_data and scam_score_data["scam_probability"] >= 30:
-        score_line = format_scam_score_line(scam_score_data, lang)
-        answer = score_line + "\n\n" + answer
+    # Scam score is displayed visually by format_answer_with_visual in app.py (bar chart + meter)
+    # We only store it in trace for the judge panel — no text prepend here to avoid duplication
+    if scam_score_data:
         LAST_GEMMA_TRACE["scam_score"] = scam_score_data
 
     meta = {
@@ -3298,6 +3420,209 @@ def repairwise_answer(
         },
     }
     return (answer, meta) if return_meta else answer
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# TRUE STREAMING ENTRY POINT
+# Runs triage/RAG/tools synchronously (<1s), then streams Ollama tokens
+# to the caller so Gradio can display them immediately.
+# Yields: (partial_text, is_final, meta_dict)
+# ══════════════════════════════════════════════════════════════════════════════
+def repairwise_stream(
+    user_text: str,
+    language: str = "Spanish",
+    image=None,
+    conversation_history: list[dict] | None = None,
+):
+    """Generator — yields (text_or_status, is_final, meta) at each pipeline step.
+    Status updates use prefix "__STATUS__:" so app.py can show live progress.
+    Token updates are raw text. Final yield has is_final=True with full meta.
+    """
+    import time as _time
+    _t0 = _time.time()
+
+    def _status(msg):
+        return f"__STATUS__:{msg}"
+
+    def _elapsed():
+        return f"{_time.time() - _t0:.1f}s"
+
+    reset_gemma_trace()
+    lang = normalize_language_name(language)
+    original_text = (user_text or "").strip()
+
+    # ── Image path: one-shot (no streaming) ──────────────────────────────────
+    if image is not None:
+        yield _status("📸 Analizando imagen con Gemma Vision..."), False, {}
+        result = repairwise_answer(
+            user_text, language=language, image=image,
+            return_meta=True, conversation_history=conversation_history,
+        )
+        answer, meta = (result[0], result[1]) if isinstance(result, tuple) else (str(result), {})
+        yield answer, True, meta
+        return
+
+    if not original_text:
+        yield "Please describe the phone problem.", True, {}
+        return
+
+    # ── Phase 1: Triage ──────────────────────────────────────────────────────
+    yield _status(f"🔍 Clasificando consulta..."), False, {}
+    LAST_ROUTER_DECISION.update({"selected_tier": "template", "reason": "", "complexity_score": 0, "factors": []})
+    text, history_context = build_contextual_user_text(original_text, conversation_history)
+    triage = triage_issue(original_text, conversation_history=conversation_history)
+    cat  = triage.get("category", "?")
+    urg  = triage.get("urgency", "?")
+    urg_emoji = {"HIGH": "🔴", "MEDIUM": "🟡", "LOW": "🟢"}.get(urg, "")
+
+    yield _status(f"✅ Triage: {cat} | {urg_emoji} {urg} [{_elapsed()}]"), False, {}
+
+    # ── Phase 2: RAG ─────────────────────────────────────────────────────────
+    yield _status(f"✅ Triage: {cat} | {urg_emoji} {urg}\n📚 Buscando en base de conocimiento..."), False, {}
+    docs = retrieve_knowledge(text, k=7, category=cat, image_present=False)
+
+    scam_score_data = None
+    if cat in {"scam_phishing", "scam_clicked_link", "scam_data_entered"}:
+        scam_score_data = compute_scam_score(original_text)
+
+    n_docs = len([d for d in docs[:3] if d.get("category") == cat])
+    yield _status(
+        f"✅ Triage: {cat} | {urg_emoji} {urg}\n"
+        f"✅ RAG: {n_docs} documentos relevantes [{_elapsed()}]"
+    ), False, {}
+
+    # ── Phase 3: Cactus Router ───────────────────────────────────────────────
+    complexity = compute_query_complexity(text, triage, conversation_history or [], lang)
+    selected_tier = select_model_tier(complexity, triage, has_image=False, demo_mode=DEMO_MODE)
+    LAST_GEMMA_TRACE["router"] = get_router_summary()
+    score = complexity["score"]
+
+    yield _status(
+        f"✅ Triage: {cat} | {urg_emoji} {urg}\n"
+        f"✅ RAG: {n_docs} docs\n"
+        f"🦁 Cactus Router: {selected_tier.upper()} (complejidad {score}/100) [{_elapsed()}]"
+    ), False, {}
+
+    # ── Phase 4: Follow-up / template check ──────────────────────────────────
+    conv_followup = None
+    if conversation_history and triage.get("match_type") == "conversation_inherited":
+        conv_followup = get_followup_response(triage, original_text, lang, conversation_history)
+
+    followup = None
+    if should_ask_followup(triage, original_text, conversation_history or []):
+        followup = get_followup_question(triage["category"], lang, conversation_history or [])
+
+    if conv_followup:
+        yield conv_followup, True, _make_meta(triage, docs, scam_score_data, lang, history_context, "conversational_followup_specific")
+        return
+    elif followup:
+        yield followup, True, _make_meta(triage, docs, scam_score_data, lang, history_context, "conversational_followup")
+        return
+    elif selected_tier == "template":
+        yield _status(
+            f"✅ Triage: {cat} | {urg_emoji} {urg}\n"
+            f"✅ RAG: {n_docs} docs\n"
+            f"🦁 Cactus: TEMPLATE (safety override)\n"
+            f"⚡ Generando respuesta segura..."
+        ), False, {}
+        answer = safe_fallback_answer(text, triage, docs[:3], lang, image_present=False)
+        LAST_GEMMA_TRACE["path"] = "cactus_template_tier"
+        yield answer, True, _make_meta(triage, docs, scam_score_data, lang, history_context, "cactus_template_tier")
+        return
+
+    # ── Phase 5: Function calling (tools) ────────────────────────────────────
+    category = triage.get("category", "unknown")
+    urgency  = triage.get("urgency", "LOW")
+    sel_tool = select_tool_for_category(category, original_text)
+
+    yield _status(
+        f"✅ Triage: {cat} | {urg_emoji} {urg}\n"
+        f"✅ RAG: {n_docs} docs\n"
+        f"🦁 Cactus: {selected_tier.upper()} (score {score}/100)\n"
+        f"🛠️ Tool: {sel_tool}..."
+    ), False, {}
+
+    if len(norm_text(original_text).split()) >= 3:
+        tool_result = call_gemma_function_router(original_text, triage, docs, lang)
+    else:
+        tool_result = dispatch_tool(sel_tool, deterministic_args_for_tool(sel_tool, original_text, triage))
+
+    tool_summary = ""
+    if category in {"scam_phishing","scam_clicked_link","scam_data_entered"} and "scam_probability" in str(tool_result):
+        prob = tool_result.get("scam_probability", "?")
+        tool_summary = f"→ {prob}% probabilidad estafa"
+    elif "severity_score" in str(tool_result):
+        sev = tool_result.get("severity_score", "?")
+        tool_summary = f"→ severidad {sev}/10"
+
+    yield _status(
+        f"✅ Triage: {cat} | {urg_emoji} {urg}\n"
+        f"✅ RAG: {n_docs} docs\n"
+        f"🦁 Cactus: {selected_tier.upper()}\n"
+        f"✅ Tool: {sel_tool} {tool_summary} [{_elapsed()}]\n"
+        f"🤖 Gemma generando respuesta..."
+    ), False, {}
+
+    base = safe_fallback_answer(text, triage, docs[:3], lang, image_present=False)
+    base = inject_tool_next_step(base, tool_result, lang)
+
+    # ── Phase 6: Gemma streaming ─────────────────────────────────────────────
+    _backend_ok = _USE_OLLAMA or _USE_LLAMACPP
+    if not (USE_GEMMA_TEXT_ENRICHMENT and category in TEXT_GEMMA_ENRICH_CATEGORIES and _backend_ok):
+        yield base, True, _make_meta(triage, docs, scam_score_data, lang, history_context, "cactus_template_tier")
+        return
+
+    max_tok = 350 if urgency == "HIGH" else 280
+    prompt = build_text_enrichment_prompt(base, text, triage, docs[:4], lang)
+
+    streamed = ""
+    got_tokens = False
+    stream_fn = _ollama_stream if _USE_OLLAMA else _llamacpp_stream
+
+    try:
+        for token in stream_fn(prompt, max_tokens=max_tok):
+            # Filter out thinking block markers Gemma sometimes emits
+            clean_token = token.replace("<think>","").replace("</think>","")
+            streamed += clean_token
+            got_tokens = True
+            if streamed.strip():  # only yield when we have real content
+                yield streamed, False, {}
+    except Exception as exc:
+        LAST_GEMMA_TRACE["error"] = f"Stream error: {exc}"
+
+    if got_tokens and not looks_bad_output(streamed) and not violates_requested_language(streamed, lang) and not answer_conflicts_with_category(streamed, category, text):
+        answer = inject_tool_next_step(streamed[:1800], tool_result, lang)
+        path = "gemma_stream_generation"
+    else:
+        answer = base
+        path = "gemma_stream_fallback"
+
+    LAST_GEMMA_TRACE.update({"called": True, "path": path, "raw": streamed[:1200], "fallback_used": not got_tokens})
+    if scam_score_data:
+        LAST_GEMMA_TRACE["scam_score"] = scam_score_data
+
+    yield answer, True, _make_meta(triage, docs, scam_score_data, lang, history_context, path)
+
+
+def _make_meta(triage, docs, scam_score_data, lang, history_context, path):
+    """Helper to build meta dict for repairwise_stream final yields."""
+    if scam_score_data:
+        LAST_GEMMA_TRACE["scam_score"] = scam_score_data
+    LAST_GEMMA_TRACE["path"] = path
+    return {
+        "version": REPAIRWISE_VERSION,
+        "scam_analysis": scam_score_data,
+        "cactus_router": LAST_ROUTER_DECISION.copy(),
+        "triage": triage,
+        "sources": [{"id": d.get("id"), "category": d.get("category"), "risk": d.get("risk"),
+                     "score": round(float(d.get("score", 0)), 3)} for d in docs[:5]],
+        "context_sufficient": is_context_sufficient(docs, triage.get("category","unknown")),
+        "photo_mode": False,
+        "language": lang,
+        "history_used": bool(history_context),
+        "gemma": dict(LAST_GEMMA_TRACE),
+        "retrieval": {"semantic_embedding_available": bool(EMBEDDING_AVAILABLE)},
+    }
 
 def repairwise_debug(user_text: str, language: str = "Spanish", image=None, conversation_history: list[dict] | None = None):
     return repairwise_answer(user_text, language=language, image=image, return_meta=True, conversation_history=conversation_history)
