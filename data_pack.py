@@ -474,15 +474,24 @@ CATEGORY_RESPONSE_TEMPLATES = {'English': {'charging_issue': {'diagnosis': 'the 
                                          'sender, and contact your bank using the official app or phone number.',
                                'visit': 'if you already entered details, call the bank immediately and change '
                                         'passwords.'},
-               'scam_clicked_link': {'diagnosis': 'you opened a phishing link — act immediately even if you did not enter any data.',
-                               'action': '1) Close the browser now. 2) Clear browser history and cache. 3) Change bank and email passwords from a DIFFERENT device. 4) Enable 2-factor authentication on your bank app. 5) Monitor your bank accounts for 30 days.',
-                               'visit': 'call your bank now and explain that you opened a suspicious link — they can flag your account.'},
+               'scam_clicked_link': {
+                'diagnosis': 'you opened a phishing link — act immediately even if you did not enter any data.',
+                'action': '1) Close the browser NOW. 2) Clear browser history/cache. 3) Change bank and email passwords from a DIFFERENT device. 4) Enable 2-factor authentication on your bank app. 5) Monitor bank accounts for 30 days.',
+                'visit': 'call your bank now and explain you opened a suspicious link — they can flag your account for monitoring.'},
+             'scam_data_entered': {
+                'diagnosis': 'EMERGENCY — you entered personal data on a phishing site.',
+                'action': '1) CALL YOUR BANK RIGHT NOW — ask them to block your card and freeze the account. 2) Change bank and email passwords from a DIFFERENT device. 3) Enable 2FA on all accounts. 4) Report to Action Fraud (UK) or your local cybercrime authority. 5) Screenshot the scam SMS as evidence.',
+                'visit': 'call your bank IMMEDIATELY — every minute matters. Then report to police (cybercrime unit).'},
              'privacy_repair': {'diagnosis': 'the repair may expose personal data if the phone is unlocked or handed '
                                              'over without precautions.',
                                 'action': 'Back up your data, remove sensitive apps where possible, sign out of '
                                           'accounts if needed, and ask the technician what access is required.',
                                 'visit': 'choose a trusted repair shop and avoid sharing passcodes unless strictly '
                                          'necessary.'},
+             'battery_drain': {
+                 'diagnosis': 'the battery is draining faster than normal — common causes are background apps, location services, high brightness, weak 5G signal, or a battery that needs replacing.',
+                 'action': 'Check Settings > Battery for top consumers. Restrict background apps, reduce screen brightness, switch to 4G in weak signal areas. Use Battery Health (iOS) or AccuBattery (Android) to check actual capacity.',
+                 'visit': 'if battery capacity is below 80%, the phone gets hot while discharging, or drain started suddenly after an update.'},
              'vague_problem': {'diagnosis': 'there is not enough information yet to know whether the issue is screen, '
                                             'charging, battery, software, signal, audio, camera, or an app.',
                                'action': 'Tell me whether the phone turns on, charges, shows image, has signal, or if '
@@ -597,9 +606,10 @@ CATEGORY_RESPONSE_TEMPLATES = {'English': {'charging_issue': {'diagnosis': 'the 
                                'action': 'No abras el enlace, no pongas tarjeta ni códigos, bloquea/reportar el '
                                          'remitente y contacta con tu banco desde app o número oficial.',
                                'visit': 'si ya metiste datos, llama al banco inmediatamente y cambia contraseñas.'},
-               'scam_clicked_link': {'diagnosis': 'has abierto un enlace de phishing — actúa ahora aunque no hayas puesto datos.' if 'Spanish' == 'Spanish' else 'you opened a phishing link — act now even if you did not enter data.',
-                               'action': '1) Cierra el navegador. 2) Borra caché. 3) Cambia contraseñas desde otro dispositivo. 4) Activa 2FA en tu banco. 5) Supervisa movimientos 30 días.' if 'Spanish' == 'Spanish' else '1) Close the browser. 2) Clear cache. 3) Change passwords from a different device. 4) Enable 2FA on bank. 5) Monitor accounts 30 days.',
-                               'visit': 'llama al banco ahora — explícales que abriste un enlace sospechoso.' if 'Spanish' == 'Spanish' else 'call your bank now — tell them you opened a suspicious link.'},
+               'scam_clicked_link': {
+                'diagnosis': 'has abierto un enlace de phishing — actúa ahora aunque no hayas introducido datos.',
+                'action': '1) Cierra el navegador AHORA. 2) Borra historial y caché. 3) Cambia contraseñas del banco y email desde OTRO dispositivo. 4) Activa el doble factor (2FA) en tu banco. 5) Supervisa movimientos bancarios durante 30 días.',
+                'visit': 'llama a tu banco ahora mismo — explica que abriste un enlace sospechoso para que bloqueen preventivamente.'},
                'scam_data_entered': {'diagnosis': '¡EMERGENCIA! Has introducido tus datos en un sitio de phishing.',
                                'action': '1) LLAMA A TU BANCO AHORA — pide bloquear la tarjeta y cuenta. '
                                          '2) Cambia contraseñas del banco y email desde OTRO dispositivo. '
@@ -614,6 +624,10 @@ CATEGORY_RESPONSE_TEMPLATES = {'English': {'charging_issue': {'diagnosis': 'the 
                                           'y pregunta qué acceso necesita el técnico.',
                                 'visit': 'elige una tienda de confianza y no compartas contraseña salvo que sea '
                                          'imprescindible.'},
+             'battery_drain': {
+                 'diagnosis': 'la batería se gasta más rápido de lo normal. Causas habituales: apps en segundo plano, ubicación siempre activa, brillo alto, señal 5G débil o batería desgastada.',
+                 'action': 'Revisa Ajustes > Batería. Limita apps en segundo plano, reduce brillo, cambia a 4G en zonas con mala señal. Comprueba la salud de la batería (iOS) o usa AccuBattery (Android).',
+                 'visit': 'si la capacidad es inferior al 80%, el móvil se calienta al usarlo o el consumo aumentó de repente tras una actualización.'},
              'vague_problem': {'diagnosis': 'todavía no hay suficiente información para saber si es pantalla, carga, '
                                             'batería, software, señal, sonido, cámara o una app.',
                                'action': 'Dime si enciende, carga, muestra imagen, tiene señal o si falla una app '
@@ -732,15 +746,24 @@ CATEGORY_RESPONSE_TEMPLATES = {'English': {'charging_issue': {'diagnosis': 'the 
                                'action': "No obris l'enllaç, no posis targeta ni codis, bloqueja/reportar el remitent "
                                          "i contacta amb el banc des de l'app o número oficial.",
                                'visit': 'si ja has posat dades, truca al banc immediatament i canvia contrasenyes.'},
-               'scam_clicked_link': {'diagnosis': 'has obert un enllaç de phishing — actua ara encara que no hagis introduït dades.',
-                               'action': "1) Tanca el navegador ara. 2) Esborra l'historial i la memòria cau. 3) Canvia contrasenyes del banc i correu des d'UN ALTRE dispositiu. 4) Activa la verificació en 2 passos al banc. 5) Supervisa els moviments 30 dies.",
-                               'visit': "truca al banc ara — explica'ls que has obert un enllaç sospitós."},
+               'scam_clicked_link': {
+                'diagnosis': 'has obert un enllaç de phishing — actua ara encara que no hagis introduït dades.',
+                'action': "1) Tanca el navegador ARA. 2) Esborra l'historial i la memòria cau. 3) Canvia contrasenyes del banc i correu des d'UN ALTRE dispositiu. 4) Activa la verificació en 2 passos al banc. 5) Supervisa els moviments 30 dies.",
+                'visit': "truca al banc ara — explica'ls que has obert un enllaç sospitós."},
+             'scam_data_entered': {
+                'diagnosis': 'EMERGÈNCIA — has introduït dades personals en un lloc de phishing.',
+                'action': "1) TRUCA AL BANC ARA MATEIX — demana que bloquin la targeta i el compte. 2) Canvia contrasenyes des d'UN ALTRE dispositiu. 3) Activa el doble factor (2FA) a tot arreu. 4) Denuncia a la Policia o Mossos d'Esquadra. 5) Guarda captures del SMS com a prova.",
+                'visit': "truca al banc IMMEDIATAMENT — cada minut compta. Després ves a la comissaria a presentar denúncia."},
              'privacy_repair': {'diagnosis': 'la reparació pot exposar dades personals si entregues el mòbil '
                                              'desbloquejat o sense precaucions.',
                                 'action': 'Fes còpia, elimina apps sensibles si pots, tanca sessions si cal i pregunta '
                                           'quin accés necessita el tècnic.',
                                 'visit': 'tria una botiga de confiança i no comparteixis contrasenya si no és '
                                          'imprescindible.'},
+             'battery_drain': {
+                 'diagnosis': 'la bateria es gasta més ràpid del normal. Causes habituals: apps en segon pla, ubicació sempre activa, lluentor alta, senyal 5G feble o bateria desgastada.',
+                 'action': 'Revisa Configuració > Bateria. Limita apps en segon pla, redueix la lluentor, canvia a 4G en zones de mala cobertura. Comprova la salut de la bateria (iOS) o usa AccuBattery (Android).',
+                 'visit': "si la capacitat és inferior al 80%, el mòbil s'escalfa en ús normal o el consum va augmentar de cop després d'una actualització."},
              'vague_problem': {'diagnosis': 'encara no hi ha prou informació per saber si és pantalla, càrrega, '
                                             'bateria, software, senyal, so, càmera o una app.',
                                'action': "Digues-me si s'encén, carrega, mostra imatge, té senyal o si falla una app "
@@ -862,9 +885,14 @@ CATEGORY_RESPONSE_TEMPLATES = {'English': {'charging_issue': {'diagnosis': 'the 
                                       'کو official app یا number سے contact کریں۔',
                             'visit': 'اگر آپ details ڈال چکے ہیں تو فوراً bank کو call کریں اور passwords change '
                                      'کریں۔'},
-               'scam_clicked_link': {'diagnosis': 'آپ نے فشنگ لنک کھولا — فوری کارروائی کریں چاہے ڈیٹا نہ دیا ہو۔',
-                               'action': 'براؤزر بند کریں۔ ہسٹری اور کیشے صاف کریں۔ دوسرے ڈیوائس سے بینک اور ایمیل پاسورڈ بدلیں۔ 2FA آن کریں۔ 30 دن تک اکاؤنٹ مانیٹر کریں۔',
-                               'visit': 'ابھی بینک کو کال کریں — بتائیں کہ مشکوک لنک کھولا تھا۔'},
+               'scam_clicked_link': {
+                'diagnosis': 'آپ نے فشنگ لنک کھولا — فوری کارروائی کریں چاہے ڈیٹا نہ دیا ہو۔',
+                'action': '1) ابھی براؤزر بند کریں۔ 2) ہسٹری اور کیشے صاف کریں۔ 3) دوسرے ڈیوائس سے بینک اور ایمیل پاسورڈ بدلیں۔ 4) 2FA (دو مرحلہ تصدیق) آن کریں۔ 5) 30 دن تک اکاؤنٹ مانیٹر کریں۔',
+                'visit': 'ابھی بینک کو کال کریں — بتائیں کہ مشکوک لنک کھولا تھا تاکہ اکاؤنٹ محفوظ کریں۔'},
+             'scam_data_entered': {
+                'diagnosis': 'ایمرجنسی — آپ نے فشنگ سائٹ پر ذاتی معلومات دے دی ہیں۔',
+                'action': '1) ابھی بینک کو کال کریں — کارڈ اور اکاؤنٹ بلاک کروائیں۔ 2) دوسرے ڈیوائس سے پاسورڈ بدلیں۔ 3) ہر جگہ 2FA آن کریں۔ 4) FIA سائبر کرائم یا مقامی پولیس کو رپورٹ کریں۔ 5) SMS کا اسکرین شاٹ بطور ثبوت رکھیں۔',
+                'visit': 'فوراً بینک کو کال کریں — ہر منٹ قیمتی ہے۔ پھر پولیس میں درخواست دیں۔'},
           'privacy_repair': {'diagnosis': 'repair کے دوران personal data expose ہو سکتا ہے اگر phone unlocked یا بغیر '
                                           'احتیاط کے دیا جائے۔',
                              'action': 'backup بنائیں، sensitive apps remove/sign out کریں اگر possible ہو، اور '
@@ -976,13 +1004,22 @@ CATEGORY_RESPONSE_TEMPLATES = {'English': {'charging_issue': {'diagnosis': 'the 
                               'action': 'لا تفتح الرابط، لا تدخل بيانات البطاقة أو الأكواد، احظر/بلّغ المرسل واتصل '
                                         'بالبنك من التطبيق أو الرقم الرسمي.',
                               'visit': 'إذا أدخلت بياناتك بالفعل، اتصل بالبنك فوراً وغيّر كلمات المرور.'},
-               'scam_clicked_link': {'diagnosis': 'فتحت رابط تصيد — تصرف فوراً حتى لو لم تُدخل أي بيانات.',
-                               'action': 'اغلق المتصفح الآن. امسح السجل ومخبأ المتصفح. غيّر كلمات مرور البنك والبريد من جهاز آخر. فعّل التحقق بخطوتين. راقب حسابك 30 يوماً.',
-                               'visit': 'اتصل بالبنك الآن وأخبرهم أنك فتحت رابطاً مشبوهاً.'},
+               'scam_clicked_link': {
+                'diagnosis': 'فتحت رابط تصيد — تصرف فوراً حتى لو لم تُدخل أي بيانات.',
+                'action': '1) أغلق المتصفح الآن. 2) امسح السجل ومخبأ المتصفح. 3) غيّر كلمات مرور البنك والبريد من جهاز آخر. 4) فعّل التحقق بخطوتين. 5) راقب حسابك 30 يوماً.',
+                'visit': 'اتصل بالبنك الآن وأخبرهم أنك فتحت رابطاً مشبوهاً.'},
+             'scam_data_entered': {
+                'diagnosis': 'طوارئ — أدخلت بياناتك الشخصية في موقع تصيد.',
+                'action': '1) اتصل بالبنك فوراً — اطلب تجميد البطاقة والحساب. 2) غيّر كلمات المرور من جهاز آخر. 3) فعّل التحقق بخطوتين في كل مكان. 4) أبلغ الشرطة الإلكترونية. 5) احتفظ بصور من الرسالة كدليل.',
+                'visit': 'اتصل بالبنك الآن فوراً — كل دقيقة مهمة. ثم قدّم بلاغاً للشرطة.'},
             'privacy_repair': {'diagnosis': 'قد يكشف الإصلاح بيانات شخصية إذا سلّمت الهاتف مفتوحاً أو دون احتياطات.',
                                'action': 'اعمل نسخة احتياطية، احذف التطبيقات الحساسة إن أمكن، سجّل الخروج إذا لزم، '
                                          'واسأل الفني لماذا يحتاج الوصول.',
                                'visit': 'اختر محل إصلاح موثوقاً ولا تشارك كلمة المرور إلا عند الضرورة.'},
+            'battery_drain': {
+                'diagnosis': 'البطارية تنفد أسرع من المعتاد. الأسباب الشائعة: تطبيقات الخلفية، خدمات الموقع، السطوع العالي، ضعف إشارة 5G، أو بطارية مستهلكة.',
+                'action': 'تحقق من الإعدادات > البطارية للمستهلكين الأكثر. قيّد التطبيقات في الخلفية، قلل السطوع، انتقل لـ 4G في مناطق الإشارة الضعيفة. تحقق من صحة البطارية في الإعدادات.',
+                'visit': 'إذا كانت سعة البطارية أقل من 80%، أو يسخن الهاتف أثناء الاستخدام العادي، أو بدأ الاستنزاف فجأة بعد تحديث.'},
             'vague_problem': {'diagnosis': 'لا توجد معلومات كافية لمعرفة هل المشكلة شاشة، شحن، بطارية، نظام، شبكة، '
                                            'صوت، كاميرا أو تطبيق.',
                               'action': 'أخبرني هل الهاتف يشتغل، يشحن، يعرض صورة، لديه شبكة، أو هل تطبيق معين لا يعمل. '
@@ -1101,15 +1138,24 @@ CATEGORY_RESPONSE_TEMPLATES = {'English': {'charging_issue': {'diagnosis': 'the 
                                 'action': 'Nu deschide linkul, nu introduce cardul sau coduri, blochează/raportează '
                                           'expeditorul și contactează banca prin aplicația sau numărul oficial.',
                                 'visit': 'dacă ai introdus deja date, sună imediat banca și schimbă parolele.'},
-               'scam_clicked_link': {'diagnosis': 'ai deschis un link de phishing — acționează imediat chiar dacă nu ai introdus date.',
-                               'action': '1) Închide browserul acum. 2) Șterge istoricul și cache-ul. 3) Schimbă parolele băncii și emailului de pe UN ALT dispozitiv. 4) Activează autentificarea în 2 pași. 5) Monitorizează contul 30 de zile.',
-                               'visit': 'sună banca acum și explică-le că ai deschis un link suspect.'},
+               'scam_clicked_link': {
+                'diagnosis': 'ai deschis un link de phishing — acționează imediat chiar dacă nu ai introdus date.',
+                'action': '1) Închide browserul ACUM. 2) Șterge istoricul și cache-ul. 3) Schimbă parolele băncii și emailului de pe UN ALT dispozitiv. 4) Activează autentificarea în 2 pași. 5) Monitorizează contul 30 de zile.',
+                'visit': 'sună banca acum și explică-le că ai deschis un link suspect.'},
+             'scam_data_entered': {
+                'diagnosis': 'URGENȚĂ — ai introdus date personale pe un site de phishing.',
+                'action': '1) SUNĂ BANCA ACUM — cere blocarea cardului și a contului. 2) Schimbă parolele de pe UN ALT dispozitiv. 3) Activează autentificarea în 2 pași. 4) Raportează la CERT-RO sau Poliția Română. 5) Fă screenshot la mesajul suspect ca dovadă.',
+                'visit': 'sună banca IMEDIAT — fiecare minut contează. Apoi mergi la secția de poliție.'},
               'privacy_repair': {'diagnosis': 'reparația poate expune date personale dacă predai telefonul deblocat '
                                               'sau fără precauții.',
                                  'action': 'Fă backup, elimină aplicații sensibile dacă poți, deloghează conturi dacă '
                                            'e nevoie și întreabă tehnicianul ce acces necesită.',
                                  'visit': 'alege un service de încredere și nu partaja parola decât dacă este strict '
                                           'necesar.'},
+              'battery_drain': {
+                  'diagnosis': 'bateria se descarcă mai repede decât normal. Cauze comune: aplicații în fundal, locație mereu activă, luminozitate mare, semnal 5G slab sau baterie uzată.',
+                  'action': 'Verifică Setări > Baterie. Restricționează aplicațiile din fundal, reduce luminozitatea, treci pe 4G în zone cu semnal slab. Verifică starea bateriei (iOS: Battery Health) sau folosește AccuBattery (Android).',
+                  'visit': 'dacă capacitatea e sub 80%, telefonul se încălzește în utilizare normală sau descărcarea s-a intensificat brusc după un update.'},
               'vague_problem': {'diagnosis': 'nu există încă suficiente informații ca să știm dacă problema este '
                                              'ecran, încărcare, baterie, software, semnal, sunet, cameră sau '
                                              'aplicație.',
@@ -1207,47 +1253,73 @@ LOCAL_KNOWLEDGE.extend([
 SECTION_LABELS = LABELS
 
 # ── PHOTO_VISUAL_CATEGORIES ───────────────────────────────────────────────────
-# Maps visual damage patterns detected in photos to repair categories
+# Single source of truth: engine.py imports this directly (no override).
+# Format: each key has repair_category, risk, sources, keywords.
 PHOTO_VISUAL_CATEGORIES = {
-    "swollen_battery": {
-        "keywords": ["swollen", "bulging", "inflated", "lifted screen", "bent back"],
-        "repair_category": "battery_safety",
-        "urgency": "HIGH",
-    },
-    "cracked_screen": {
-        "keywords": ["crack", "broken screen", "shattered", "lines on screen", "black spots"],
+    "photo_screen_crack": {
         "repair_category": "screen_repair",
-        "urgency": "MEDIUM",
+        "risk": "MEDIUM",
+        "sources": ["photo_screen_crack_display", "photo_visual_inspection_external", "screen_display_touch"],
+        "keywords": ["cracked screen", "broken glass", "green line", "black display", "pantalla rota",
+                     "línea verde", "pantalla partida", "broken screen", "shattered", "lines on screen"],
     },
-    "water_damage": {
-        "keywords": ["water", "wet", "liquid", "corrosion", "rust", "moisture"],
+    "photo_battery_swelling": {
+        "repair_category": "battery_safety",
+        "risk": "HIGH",
+        "sources": ["photo_battery_swelling_lifted_screen", "battery_swollen_safety"],
+        "keywords": ["lifted screen", "swollen battery", "back cover lifted", "pantalla levantada",
+                     "batería hinchada", "swollen", "bulging", "inflated", "bent back", "inflada"],
+    },
+    "photo_charging_port": {
+        "repair_category": "charging_port_issue",
+        "risk": "MEDIUM",
+        "sources": ["photo_charging_port_damage", "charging_port_dirty_loose"],
+        "keywords": ["charging port", "usb c", "lightning", "puerto de carga", "conector sucio",
+                     "port damage", "connector", "dirty port", "lint port"],
+    },
+    "photo_water_corrosion": {
         "repair_category": "water_damage",
-        "urgency": "HIGH",
+        "risk": "HIGH",
+        "sources": ["photo_water_corrosion_visible", "water_damage_salt_corrosion"],
+        "keywords": ["corrosion", "water damage", "liquid", "moisture", "agua", "humedad",
+                     "óxido", "corrosión", "rust", "wet", "liquid damage", "oxidation"],
     },
-    "phishing_sms": {
-        "keywords": ["sms", "text message", "bank", "link", "verify", "pin", "password"],
+    "photo_scam_screenshot": {
         "repair_category": "scam_phishing",
-        "urgency": "HIGH",
+        "risk": "HIGH",
+        "sources": ["photo_scam_sms_screenshot", "scam_bank_sms_privacy", "scam_sms_urgency_patterns"],
+        "keywords": ["sms", "bank", "link", "card", "otp", "pin", "password", "banco", "tarjeta",
+                     "codigo", "verify", "phishing", "text message", "suspicious message"],
     },
-    "charging_port": {
-        "keywords": ["port", "connector", "charging", "usb", "dirty port"],
-        "repair_category": "charging_issue",
-        "urgency": "MEDIUM",
-    },
-    "overheating": {
-        "keywords": ["hot", "overheating", "burn marks", "discoloration"],
+    "photo_overheating": {
         "repair_category": "overheating_issue",
-        "urgency": "HIGH",
+        "risk": "HIGH",
+        "sources": ["overheating_safety_shutdown", "overheating_gaming_performance"],
+        "keywords": ["hot", "overheating", "burn marks", "discoloration", "caliente", "quemado",
+                     "burn smell", "heat damage", "sobrecalentado"],
     },
-    "general_damage": {
-        "keywords": ["damage", "broken", "physical damage"],
-        "repair_category": "unknown",
-        "urgency": "LOW",
+    "photo_app_error_screenshot": {
+        "repair_category": "app_issue",
+        "risk": "LOW",
+        "sources": ["photo_app_error_screenshot", "app_whatsapp_not_working", "storage_full_app_system"],
+        "keywords": ["whatsapp", "instagram", "tiktok", "app error", "login", "no funciona",
+                     "se cierra", "crash", "error screen", "app crashed"],
+    },
+    "photo_camera_lens": {
+        "repair_category": "camera_issue",
+        "risk": "MEDIUM",
+        "sources": ["photo_camera_lens_damage", "camera_black_blurry_permissions"],
+        "keywords": ["camera lens", "lens cracked", "camera glass", "cámara", "lente",
+                     "foto borrosa", "scratched lens", "camera dirty", "lente rota"],
+    },
+    "photo_unclear": {
+        "repair_category": "photo_unclear",
+        "risk": "LOW",
+        "sources": ["photo_unclear_quality", "photo_visual_inspection_external"],
+        "keywords": ["unclear photo", "blurry", "dark", "low resolution", "foto borrosa",
+                     "imagen oscura", "dark photo", "cant see"],
     },
 }
-
-# ── REPAIRWISE_VERSION ────────────────────────────────────────────────────────
-REPAIRWISE_VERSION = "V17"
 
 # ── Extended knowledge base — added for hackathon v2 ────────────────────────
 LOCAL_KNOWLEDGE.extend([
@@ -1256,121 +1328,325 @@ LOCAL_KNOWLEDGE.extend([
         "id": "wireless_charging_issues",
         "category": "charging_issue",
         "risk": "LOW",
+        "topic": "wireless charging qi coil not working slow thick case carga inalambrica magsafe",
+        "aliases": ["wireless charging", "carga inalámbrica", "qi", "magsafe", "no carga inalámbrico"],
         "text": (
             "Wireless charging issues: dirty coil, thick case blocking contact, "
             "phone overheating during wireless charge (normal up to 40°C). "
-            "Fix: remove case, clean back glass, use certified Qi charger. "
-            "If wired charges but wireless does not: coil may be damaged, needs repair."
+            "Fix: remove case, clean back glass, use certified Qi/MagSafe charger. "
+            "If wired charges but wireless does not: coil may be damaged, needs repair. "
+            "Always use certified chargers to avoid overheating risk."
         ),
         "source": "RepairWise KB 2024",
-        "languages": ["Spanish", "English", "Catalan", "Arabic", "Romanian", "Urdu"],
     },
     # Screen
     {
         "id": "screen_burn_in_oled",
         "category": "screen_repair",
         "risk": "LOW",
+        "topic": "oled screen burn in ghost image amoled pixel samsung ghost pantalla quemada marca permanente",
+        "aliases": ["burn in", "pantalla quemada", "ghost image", "marca pantalla", "imagen fantasma", "amoled burn"],
         "text": (
-            "OLED screen burn-in: permanent ghost image from static content displayed too long. "
-            "Prevention: auto-brightness on, dark mode, vary screen content. "
-            "Partial fix: run pixel refresher tool if available in settings. "
-            "Full fix: screen replacement. Common on Samsung AMOLED after 3+ years."
+            "OLED/AMOLED screen burn-in: permanent ghost image from static content displayed too long. "
+            "Prevention: use auto-brightness, dark mode, vary screen content, enable screen saver. "
+            "Partial fix: run pixel refresher tool if available (Samsung: Settings > Display). "
+            "Full fix: screen replacement. Common on Samsung AMOLED, iPhone OLED after 3+ years. "
+            "Most noticeable on grey backgrounds — navigation bar ghost is most common."
         ),
         "source": "RepairWise KB 2024",
-        "languages": ["Spanish", "English"],
     },
     # Boot
     {
         "id": "boot_fastboot_recovery",
         "category": "boot_issue",
         "risk": "MEDIUM",
+        "topic": "fastboot recovery mode stuck android exclamation bootloop no enciende modo fastboot recuperacion",
+        "aliases": ["fastboot", "recovery mode", "modo recuperacion", "modo fastboot", "android logo exclamacion", "red exclamation"],
         "text": (
-            "Phone stuck in fastboot or recovery mode: hold power + volume up/down to exit. "
-            "If Android logo with red exclamation: tap power + volume up to enter recovery, "
-            "select 'Reboot system now'. "
-            "Factory reset only as last resort — backs up data first if possible. "
-            "Caused by: failed OTA update, corrupted system partition, third-party ROM."
+            "Phone stuck in fastboot or recovery mode: hold Power + Volume Up/Down simultaneously for 10+ seconds to force exit. "
+            "Android logo with red exclamation (no command): press Power + Volume Up briefly to enter recovery, then select 'Reboot system now'. "
+            "Factory reset only as LAST RESORT — backs up data first via Google/cloud if accessible. "
+            "Caused by: failed OTA update, corrupted system partition, accidental button press, third-party ROM. "
+            "iOS Recovery mode: connect to iTunes/Finder and select 'Restore' only if necessary."
         ),
         "source": "RepairWise KB 2024",
-        "languages": ["Spanish", "English", "Catalan"],
     },
     # Audio
     {
         "id": "audio_bluetooth_routing",
         "category": "audio_issue",
         "risk": "LOW",
+        "topic": "no sound speaker bluetooth routing audio quiet water speaker cleaner altavoz sin sonido bluetooth enruta",
+        "aliases": ["no sound speaker", "altavoz mudo", "sin sonido altavoz", "audio bluetooth", "speaker quiet", "altavoz agua"],
         "text": (
             "No sound from speaker but Bluetooth connected: audio routing to BT device. "
-            "Fix: disconnect Bluetooth or toggle off. "
-            "Speaker quiet after water exposure: dry speaker grille with soft toothbrush, "
-            "use speaker cleaner app (plays high-frequency tones to expel water). "
-            "Never insert objects into speaker grille."
+            "Fix: disconnect Bluetooth or toggle Bluetooth off completely. "
+            "Speaker quiet or muffled after water exposure: dry speaker grille gently with soft toothbrush, "
+            "then use a free 'Speaker Cleaner' or 'Fix My Speakers' app (plays high-freq tones to expel water). "
+            "Speaker bar lowered in notification: swipe down and check media volume separately from ringtone. "
+            "Never insert objects into speaker grille — damages the mesh permanently."
         ),
         "source": "RepairWise KB 2024",
-        "languages": ["Spanish", "English", "Catalan", "Romanian"],
     },
     # Privacy
     {
         "id": "privacy_data_wipe_before_repair",
         "category": "privacy_repair",
         "risk": "MEDIUM",
+        "topic": "privacy before repair data backup erase passcode repair mode shop technician privacidad antes reparar datos",
+        "aliases": ["antes de reparar", "before repair", "datos privados", "private data repair", "privacitat reparació", "personal data shop"],
         "text": (
-            "Before handing phone to repair shop: back up data to Google/iCloud/local PC. "
-            "Enable screen lock with PIN. Disable biometrics temporarily. "
-            "Log out of banking and payment apps. Remove SIM and memory card. "
-            "Use guest mode if available. Ask technician what access they need. "
-            "Reputable shops should not need your unlock PIN for hardware repairs."
+            "Before handing phone to repair shop: back up ALL data to Google/iCloud/local PC first. "
+            "Enable screen lock with PIN (not biometrics which can be bypassed). "
+            "Log out of banking, payment, and email apps. Remove SIM and memory card. "
+            "Use guest mode (Android) or Lockdown Mode (iOS) if available — limits access. "
+            "Ask technician specifically what access they need and why. "
+            "Samsung/Pixel: use 'Repair Mode' in settings — locks personal data while allowing hardware testing. "
+            "Reputable shops do NOT need your unlock PIN for hardware repairs (screen, battery, port)."
         ),
         "source": "INCIBE Privacy Guide 2024",
-        "languages": ["Spanish", "English", "Catalan", "Arabic", "Romanian", "Urdu"],
     },
     # Battery drain
     {
         "id": "battery_drain_background_apps",
         "category": "battery_drain",
         "risk": "LOW",
+        "topic": "battery drain fast background apps location 5g brightness bateria se agota rapido dura poco apps fondo",
+        "aliases": ["battery drains fast", "batería dura poco", "batería se agota", "battery life bad", "se gasta rápido", "duracio bateria"],
         "text": (
-            "Battery draining fast: check Settings > Battery for top consumers. "
-            "Common culprits: location always-on, background refresh, push email, "
-            "high screen brightness, 5G constant search in weak signal areas. "
-            "Fix: restrict background for unused apps, use adaptive brightness, "
-            "switch to WiFi calling in poor signal areas. "
-            "Replace battery if capacity below 80% (check in Settings > Battery Health on iOS, "
-            "or AccuBattery on Android)."
+            "Battery draining fast: check Settings > Battery for top power consumers. "
+            "Common culprits: location services always-on, background app refresh, push email every minute, "
+            "maximum screen brightness, 5G constantly searching in weak signal areas (5G uses 30% more battery), "
+            "rogue apps (antivirus/cleaner apps are often the worst offenders). "
+            "Fixes: restrict background for unused apps, set adaptive brightness, "
+            "switch to 4G/LTE in poor signal areas, disable push email (fetch every 30 min instead). "
+            "Replace battery if iOS Battery Health below 80%, or if Android battery capacity below 80% "
+            "(check via AccuBattery app). Hot phone + fast drain = battery may be failing or malware present."
         ),
         "source": "RepairWise KB 2024",
-        "languages": ["Spanish", "English", "Catalan", "Arabic", "Romanian", "Urdu"],
     },
     # Scam — new patterns
     {
         "id": "scam_delivery_parcel",
         "category": "scam_phishing",
         "risk": "HIGH",
+        "topic": "correos dhl fedex amazon delivery parcel scam sms customs fee paquete entrega estafa link pagar aduanas",
+        "aliases": ["correos estafa", "fake correos", "dhl sms", "fedex sms", "amazon delivery sms", "paquete detenido", "paga aduanas", "parcel scam"],
         "text": (
-            "Parcel delivery scams (Correos, DHL, FedEx impersonation): "
-            "SMS says package held, pay customs fee via link. "
-            "Real delivery companies NEVER ask for payment via SMS link. "
-            "Check tracking only at official website directly. "
-            "Common in Spain: fake Correos, fake Amazon delivery SMS. "
-            "If clicked: report to INCIBE (017) and your bank immediately."
+            "Parcel delivery scams (Correos, DHL, FedEx, Amazon impersonation): "
+            "SMS says package is held, pay customs fee via link (usually €1-€2 to lower suspicion). "
+            "Real delivery companies NEVER ask for payment via SMS link — always use official website. "
+            "Check tracking ONLY at correos.es, dhl.es, fedex.com directly — not via SMS link. "
+            "Red flags: link to non-official domain, asks for card details or OTP, urgency ('pay today or package returned'). "
+            "Common in Spain: fake Correos, fake Amazon delivery, fake Seur/GLS SMS. "
+            "If clicked or paid: report to INCIBE (call 017 free), report to bank, and report at policia.es online."
         ),
         "source": "INCIBE 2024",
-        "languages": ["Spanish", "English", "Catalan"],
     },
     # Overheating
     {
         "id": "overheating_gaming_performance",
         "category": "overheating_issue",
         "risk": "LOW",
+        "topic": "overheating gaming video phone hot temperature throttling sobrecalenta jugando video caliente",
+        "aliases": ["overheating gaming", "phone hot gaming", "se calienta jugando", "caliente videos", "temperature gaming", "throttling"],
         "text": (
-            "Phone overheating during gaming or video: normal up to 40-45°C. "
-            "Dangerous above 50°C. Signs: throttling (games slow down), warning popup. "
-            "Fix: lower graphics settings, take breaks, remove case during gaming, "
-            "avoid direct sunlight, close background apps. "
-            "Persistent overheating at normal use: check for malware or faulty battery."
+            "Phone overheating during gaming or video streaming: normal range is 35-43°C surface temp. "
+            "Concerning above 47°C, dangerous above 50°C. "
+            "Signs of thermal throttling: games suddenly slow down, performance drops, warning popup appears. "
+            "Fix: lower graphics settings in game, take 15-min breaks, remove thick case during gaming, "
+            "avoid direct sunlight, close all background apps, turn off 5G during gaming. "
+            "Persistent overheating during light use (browsing, calls): possible malware mining crypto, "
+            "failing battery, or board-level issue — needs professional diagnosis. "
+            "Never use phone while charging AND gaming simultaneously — generates maximum heat."
         ),
         "source": "RepairWise KB 2024",
-        "languages": ["Spanish", "English"],
     },
 ])
 
+# ── Wow-factor knowledge docs — hackathon v2 additions ──────────────────────
+LOCAL_KNOWLEDGE.extend([
+    # WhatsApp account hijacking scam
+    {
+        "id": "scam_whatsapp_hijack",
+        "category": "scam_phishing",
+        "risk": "HIGH",
+        "topic": "whatsapp hack hijack verification code stolen cuenta robada codigo verificacion amigo sms",
+        "aliases": ["whatsapp robado", "whatsapp hackeado", "codigo whatsapp", "whatsapp hijack", "cuenta whatsapp robada", "verification code scam"],
+        "text": (
+            "WhatsApp account hijacking: scammer pretends to be a friend or family member and asks "
+            "for a 6-digit WhatsApp verification code 'sent by mistake'. "
+            "NEVER share WhatsApp codes with anyone — WhatsApp never asks for them. "
+            "If you gave the code: immediately enable 2-Step Verification in WhatsApp Settings, "
+            "go to WhatsApp > Settings > Account > Two-step verification. "
+            "Contact WhatsApp support via email (support@whatsapp.com) to recover your account. "
+            "Warn all contacts that your WhatsApp may be compromised. "
+            "If you lost access: use WhatsApp account recovery via SMS on your own number."
+        ),
+        "source": "INCIBE WhatsApp Security 2024",
+    },
+    # Emergency timeline doc
+    {
+        "id": "scam_emergency_timeline",
+        "category": "scam_data_entered",
+        "risk": "HIGH",
+        "topic": "emergency phishing data entered timeline what to do first steps puse datos urgente banco card",
+        "aliases": ["puse mis datos", "di mis datos", "entered my data", "phishing entered", "scam data entered", "emergency scam"],
+        "text": (
+            "EMERGENCY TIMELINE after entering data on phishing site: "
+            "MINUTES 0-5: Call your bank immediately — ask to freeze card and account. Most banks have 24h fraud lines. "
+            "Spain: BBVA 900 102 801, Santander 915 123 123, CaixaBank 900 40 40 90. "
+            "MINUTES 5-15: Change passwords for email and bank from a DIFFERENT device (not the compromised phone). "
+            "Enable 2-factor authentication everywhere. "
+            "MINUTES 15-60: Report to INCIBE (call 017 free, available 9am-9pm) or online at incibe.es. "
+            "WITHIN 24H: File a police report at policia.es (denuncia online) — required for bank fraud claims. "
+            "Save screenshots of the scam message as evidence. "
+            "Monitor bank statements daily for 30 days. Cancel any cards whose details were entered."
+        ),
+        "source": "INCIBE / OCU Emergency Scam Guide 2024",
+    },
+    # iPhone-specific repair knowledge
+    {
+        "id": "iphone_repair_specific",
+        "category": "screen_repair",
+        "risk": "MEDIUM",
+        "topic": "iphone screen repair face id touch id true tone oled unauthorized repair apple genuine parts pantalla iphone",
+        "aliases": ["iphone screen", "iphone pantalla", "apple repair", "face id broken", "true tone lost", "iphone lcd oled"],
+        "text": (
+            "iPhone screen repair specifics: Apple uses genuine parts pairing — after screen replacement, "
+            "True Tone, Face ID, and maximum brightness may not work with third-party screens. "
+            "Only Apple or Apple Authorized Service Providers can preserve all functions with genuine parts. "
+            "iPhone 14+ screen swaps retain Face ID only if done at Apple. "
+            "Third-party screens: cheaper but lose True Tone and may have colour inaccuracy. "
+            "Battery replacement: iPhone 16+ require Apple diagnostic to reset battery health counter. "
+            "Always back up via iCloud or iTunes before any iPhone repair."
+        ),
+        "source": "Apple Support Documentation 2024",
+    },
+    # Android-specific repair knowledge
+    {
+        "id": "android_repair_specific",
+        "category": "screen_repair",
+        "risk": "MEDIUM",
+        "topic": "samsung galaxy android screen repair amoled fingerprint under display face unlock android repair",
+        "aliases": ["samsung repair", "samsung pantalla", "android screen", "galaxy repair", "xiaomi repair", "huawei repair"],
+        "text": (
+            "Android phone repair specifics by brand: "
+            "Samsung Galaxy S/Z: AMOLED screens must match original resolution; third-party screens may lose "
+            "in-display fingerprint and adaptive refresh. Use Repair Mode (Settings > Device Care) before handing to shop. "
+            "Xiaomi/Poco: use Mi Unlock to check bootloader status before repair. "
+            "Huawei: HMS (no Google) — backup contacts separately via Huawei Backup before any repair. "
+            "Google Pixel: iFixit kits available — designed for self-repair. "
+            "Any Android: enable USB debugging OFF and remove fingerprints before handing to technician."
+        ),
+        "source": "RepairWise KB 2024",
+    },
+    # 5G/eSIM issues
+    {
+        "id": "esim_5g_issues",
+        "category": "sim_network_issue",
+        "risk": "LOW",
+        "topic": "esim 5g network issue activation dual sim switch operator perfil eSIM activar cambiar operadora",
+        "aliases": ["esim", "e-sim", "5g not working", "5g no funciona", "esim activation", "activar esim", "dual sim esim"],
+        "text": (
+            "eSIM and 5G common issues: "
+            "eSIM not activating: must be done in strong WiFi or 4G — Settings > Mobile > Add eSIM and scan QR from carrier. "
+            "5G shows but speeds are 4G-level: may be on 5G NSA (Non-Standalone), not true 5G SA. Normal in most of Spain 2024. "
+            "5G drains battery faster: set to LTE/4G preferred if not needed for heavy streaming. "
+            "Dual SIM eSIM+physical: if eSIM disappears after update, go to Settings > Mobile and re-add profile. "
+            "Switching carriers: request eSIM QR from new carrier before cancelling old plan. "
+            "eSIM not supported: phone must be unlocked and carrier-compatible — check with carrier first."
+        ),
+        "source": "RepairWise KB 2024",
+    },
+    # Job/investment scam
+    {
+        "id": "scam_job_investment",
+        "category": "scam_phishing",
+        "risk": "HIGH",
+        "topic": "job scam work from home investment crypto whatsapp telegram easy money estafa trabajo inversión dinero facil",
+        "aliases": ["estafa trabajo", "trabajo desde casa", "inversión estafa", "crypto estafa", "easy money scam", "telegram job", "instagram investment"],
+        "text": (
+            "Job offer and investment scams via WhatsApp/Telegram/Instagram: "
+            "Signs: unsolicited message offering easy work-from-home job, high returns investment, or 'exclusive' crypto platform. "
+            "Common patterns: small initial 'profit' shown to build trust, then asks for larger deposit, then disappears. "
+            "Real jobs never ask you to pay to start working. "
+            "Real investments are regulated — check at cnmv.es (Spain) if investment platform is registered. "
+            "Instagram/WhatsApp influencer promoting crypto or investment: 99% scam or compromised account. "
+            "If you sent money: report immediately to bank, file denuncia at policia.es, and report to INCIBE (017)."
+        ),
+        "source": "CNMV / Policia Nacional 2024",
+    },
+    # DGT/Hacienda scam (Spain-specific)
+    {
+        "id": "scam_official_impersonation",
+        "category": "scam_phishing",
+        "risk": "HIGH",
+        "topic": "dgt hacienda correos seguridad social multa fine tax sms impersonation estafa organismos oficiales",
+        "aliases": ["multa dgt", "dgt sms", "hacienda sms", "seguridad social estafa", "agencia tributaria", "fake fine", "multa falsa"],
+        "text": (
+            "Government impersonation scams (DGT, Hacienda/AEAT, Seguridad Social, Correos): "
+            "SMS/email says you have a fine, tax refund, or package — click to pay or verify. "
+            "Real DGT never sends fines via SMS link — they send physical letters to your registered address. "
+            "Real Hacienda/AEAT: access only at sede.agenciatributaria.gob.es with Cl@ve or certificate. "
+            "Seguridad Social: always at sede.seg-social.gob.es — never via SMS link. "
+            "If in doubt: do NOT click the link — go directly to the official website or call the institution. "
+            "Report at incibe.es or call 017. All official Spanish government notifications use Cl@ve digital identity."
+        ),
+        "source": "AEAT / DGT / INCIBE 2024",
+    },
+    # Screen protector issues
+    {
+        "id": "screen_protector_issues",
+        "category": "screen_repair",
+        "risk": "LOW",
+        "topic": "screen protector bubble lift tempered glass face id touch fingerprint no funciona protector pantalla cristal templado",
+        "aliases": ["cristal templado", "screen protector", "protector pantalla", "tempered glass", "face id protector", "fingerprint protector"],
+        "text": (
+            "Screen protector causing issues: "
+            "Face ID failing after screen protector install: remove protector and test — Face ID IR sensor near top notch is blocked by thick protectors. Use protectors with Face ID cutout. "
+            "In-display fingerprint not working with protector: must use protectors certified for in-display fingerprint (Samsung Galaxy S/Ultra). "
+            "Tempered glass bubbles: apply in clean dustfree environment — use phone's included cleaning kit. "
+            "Privacy screen protector: reduces viewing angle and causes lower touchscreen sensitivity — normal. "
+            "Cracked protector: replace immediately — cracked protectors scratch the actual screen beneath. "
+            "Oleophobic coating removal: normal glass protectors degrade coating — use matte finish if fingerprints bother you."
+        ),
+        "source": "RepairWise KB 2024",
+    },
+    # Mobile data/APN manual config
+    {
+        "id": "mobile_data_apn_config",
+        "category": "sim_network_issue",
+        "risk": "LOW",
+        "topic": "apn mobile data config settings no internet datos moviles sin internet configurar apn operadora",
+        "aliases": ["apn", "datos moviles no funciona", "mobile data not working", "configurar internet", "internet movil", "no internet datos"],
+        "text": (
+            "Mobile data not working after SIM change or factory reset — APN configuration needed: "
+            "Android: Settings > Mobile Networks > Access Point Names > Add new APN. "
+            "Common Spain APN settings: Movistar (apn: movistar.es), Vodafone (apn: airtelnet.es), Orange (apn: orangeworld), Jazztel (apn: jazzinternet). "
+            "iOS: usually auto-configures — if not: Settings > Mobile > Mobile Data Network > APN. "
+            "After entering APN: restart phone and toggle airplane mode. "
+            "Virtual operators (Simyo, Digi, Lowi, O2): often use parent carrier APN — check operator website. "
+            "If APN already correct but no data: check if mobile data is enabled AND not in airplane mode, and data roaming if abroad."
+        ),
+        "source": "RepairWise KB 2024",
+    },
+    # Deepfake/AI voice scam
+    {
+        "id": "scam_ai_voice_deepfake",
+        "category": "scam_phishing",
+        "risk": "HIGH",
+        "topic": "ai voice clone deepfake scam family emergency son daughter voice fake call grandparent voz clonada familiar urgente dinero",
+        "aliases": ["voz clonada", "ai voice scam", "deepfake voice", "fake family call", "grandparent scam", "llamada familiar falsa", "hijo accidente"],
+        "text": (
+            "AI voice cloning scam (new 2024): scammer calls pretending to be your son, daughter, or grandchild "
+            "using an AI-cloned voice from their social media videos. Claims to be in an accident, arrested, or emergency — needs money immediately. "
+            "Red flags: called from unknown number, extreme urgency, asks for cash/Bizum/wire transfer, asks to keep it secret from other family. "
+            "What to do: HANG UP immediately. Call your family member directly on their known number to verify. "
+            "Never send money based on a phone call alone, even if the voice sounds real. "
+            "Agree on a family code word in advance that only real family members know. "
+            "Report to Policia Nacional (091) and INCIBE (017)."
+        ),
+        "source": "Policia Nacional / INCIBE 2024",
+    },
+])
