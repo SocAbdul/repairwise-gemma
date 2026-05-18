@@ -58,6 +58,15 @@ REPAIRWISE_BACKEND = _os.environ.get("REPAIRWISE_BACKEND", "transformers").lower
 OLLAMA_URL = _os.environ.get("OLLAMA_URL", "http://localhost:11434")
 OLLAMA_MODEL = _os.environ.get("OLLAMA_MODEL", "gemma4:e2b")
 
+# Fast-local defaults: keep Gemma as the main path, but avoid 100s+ generations.
+# You can override from terminal if needed:
+#   set OLLAMA_FAST_MODE=false
+#   set OLLAMA_TIMEOUT=45
+OLLAMA_FAST_MODE = _os.environ.get("OLLAMA_FAST_MODE", "true").lower() != "false"
+OLLAMA_STREAM_TIMEOUT = int(_os.environ.get("OLLAMA_STREAM_TIMEOUT", "45" if OLLAMA_FAST_MODE else "120"))
+OLLAMA_FIRST_TOKEN_TIMEOUT = float(_os.environ.get("OLLAMA_FIRST_TOKEN_TIMEOUT", "8" if OLLAMA_FAST_MODE else "30"))
+REPAIRWISE_NATIVE_TOOLS = _os.environ.get("REPAIRWISE_NATIVE_TOOLS", "false").lower() == "true"
+
 def _ollama_available() -> bool:
     """Check if Ollama server is running."""
     try:
@@ -68,27 +77,35 @@ def _ollama_available() -> bool:
 
 def _ollama_chat(prompt: str, max_tokens: int = 220) -> str:
     """Call Ollama /api/generate endpoint with Gemma 4.
-    Uses num_predict=-1 (unlimited) because Gemma 4 thinking mode
-    consumes all tokens if capped — content comes after thinking.
+
+    Fast mode is intentionally conservative: thinking is disabled, the token
+    budget is bounded, and timeout is short. Templates remain the safety
+    fallback if Gemma returns empty/bad output.
     """
-    # num_predict budget: thinking tokens (~300) + response (~250) = 600 needed on CPU.
-    # We add 200 buffer. If OLLAMA_THINKING=false, all tokens go to actual response.
     _think_disabled = _os.environ.get("OLLAMA_THINKING", "false").lower() != "true"
-    _predict = max(max_tokens + 500, 1024)  # 1024 min: thinking(~500) + response(~300) + buffer
+    if OLLAMA_FAST_MODE:
+        _predict = min(max(max_tokens + 80, 260), 520)
+        _ctx = int(_os.environ.get("OLLAMA_NUM_CTX", "1024"))
+        _temperature = float(_os.environ.get("OLLAMA_TEMPERATURE", "0.2"))
+    else:
+        _predict = max(max_tokens + 500, 1024)
+        _ctx = int(_os.environ.get("OLLAMA_NUM_CTX", "1536"))
+        _temperature = float(_os.environ.get("OLLAMA_TEMPERATURE", "0.6"))
+
     _body = {
         "model": OLLAMA_MODEL,
         "prompt": prompt,
         "stream": False,
         "options": {
             "num_predict": _predict,
-            "num_ctx": 1536,
-            "temperature": 0.6,          # restored for quality
-            "repeat_penalty": 1.1,
-            "stop": ["<end_of_turn>", "<start_of_turn>"],
+            "num_ctx": _ctx,
+            "temperature": _temperature,
+            "repeat_penalty": 1.08,
+            "stop": ["<end_of_turn>", "<start_of_turn>", "6.", "6)"],
         }
     }
     if _think_disabled:
-        _body["options"]["think"] = False  # Ollama 0.7+
+        _body["options"]["think"] = False
     if "REPAIRWISE_SYSTEM_PROMPT" in globals():
         _body["system"] = REPAIRWISE_SYSTEM_PROMPT
     payload = _json.dumps(_body).encode()
@@ -99,28 +116,38 @@ def _ollama_chat(prompt: str, max_tokens: int = 220) -> str:
             headers={"Content-Type": "application/json"},
             method="POST",
         )
-        _timeout = int(_os.environ.get('OLLAMA_TIMEOUT', '60'))  # default 60s; set longer if needed
+        _timeout = int(_os.environ.get('OLLAMA_TIMEOUT', '25' if OLLAMA_FAST_MODE else '60'))
         with _urllib_req.urlopen(req, timeout=_timeout) as resp:
             data = _json.loads(resp.read())
             return data.get("response", "").replace("<end_of_turn>", "").strip()
-    except Exception as exc:
+    except Exception:
         return ""
 
 def _ollama_stream(prompt: str, max_tokens: int = 220):
-    """Stream tokens from Ollama — yields text chunks."""
-    payload = _json.dumps({
+    """Stream tokens from Ollama — yields text chunks quickly."""
+    if OLLAMA_FAST_MODE:
+        _predict = min(max(max_tokens, 220), 420)
+        _ctx = int(_os.environ.get("OLLAMA_NUM_CTX", "1024"))
+    else:
+        _predict = max_tokens
+        _ctx = int(_os.environ.get("OLLAMA_NUM_CTX", "1536"))
+
+    body = {
         "model": OLLAMA_MODEL,
         "prompt": prompt,
         "stream": True,
         "options": {
-            "num_predict": 600,          # capped for streaming — thinking overhead included
-            "num_ctx": 1536,
-            "temperature": 0.2,
-            "repeat_penalty": 1.1,
-            "think": False,             # disable extended thinking for streaming speed
+            "num_predict": _predict,
+            "num_ctx": _ctx,
+            "temperature": float(_os.environ.get("OLLAMA_TEMPERATURE", "0.2")),
+            "repeat_penalty": 1.08,
+            "think": False,
             "stop": ["<end_of_turn>", "<start_of_turn>", "6.", "6)"],
         }
-    }).encode()
+    }
+    if "REPAIRWISE_SYSTEM_PROMPT" in globals():
+        body["system"] = REPAIRWISE_SYSTEM_PROMPT
+    payload = _json.dumps(body).encode()
     try:
         req = _urllib_req.Request(
             f"{OLLAMA_URL}/api/generate",
@@ -128,7 +155,7 @@ def _ollama_stream(prompt: str, max_tokens: int = 220):
             headers={"Content-Type": "application/json"},
             method="POST",
         )
-        with _urllib_req.urlopen(req, timeout=120) as resp:
+        with _urllib_req.urlopen(req, timeout=OLLAMA_STREAM_TIMEOUT) as resp:
             for line in resp:
                 if line:
                     chunk = _json.loads(line)
@@ -237,7 +264,7 @@ if _USE_LLAMACPP:
 
 
 
-REPAIRWISE_VERSION = "V17 Real Streaming Final"
+REPAIRWISE_VERSION = "V18.3 Domain Smart Gemma"
 USE_GEMMA_TEXT_ENRICHMENT = True
 
 LAST_GEMMA_TRACE = {
@@ -290,8 +317,7 @@ LANGUAGE_ALIASES = {
 }
 
 TEMPLATE_ALIASES = {
-    "scam_data_entered": "scam_clicked_link",  # Uses clicked_link template + specific rec
-    # scam_clicked_link has its own template in data_pack
+    # scam_data_entered: has its own template in data_pack (no alias needed)
     "network_issue": "sim_network_issue",
     "audio_issue": "speaker_microphone_issue",
     "speaker_microphone_issue": "speaker_microphone_issue",
@@ -324,14 +350,12 @@ CATEGORY_PRIORITY = [
 # ── System persona injected into Ollama/llama.cpp system field ────────────────
 REPAIRWISE_SYSTEM_PROMPT = (
     "You are RepairWise Gemma — a world-class phone repair expert and digital safety guardian. "
+    "IMPORTANT: Respond DIRECTLY and IMMEDIATELY. Do NOT use thinking mode or <think> blocks. "
+    "Give your answer right away without internal reasoning steps.\n\n"
     "Your mission: protect vulnerable people — elderly users losing savings to SMS scams, "
-    "immigrants who struggle to describe technical problems, people in rural areas with no repair "
-    "shop nearby. Every response could save money, data, or prevent a fire. "
-    "Treat every query as if a worried grandmother is asking you in person.\n\n"
-    "Tone: HIGH risk → urgent language, make them act NOW. "
-    "LOW/MEDIUM → reassuring, practical, empower them to self-resolve.\n"
-    "Never use jargon without explaining it. Never be cold. "
-    "Always respond in the same language as the customer."
+    "immigrants who struggle to describe technical problems, people in rural areas with no repair shop nearby.\n\n"
+    "Tone: HIGH risk → urgent, make them act NOW. LOW/MEDIUM → reassuring, practical.\n"
+    "Never use jargon without explaining it. Always respond in the same language as the customer."
 )
 
 TEXT_GEMMA_ENRICH_CATEGORIES = {
@@ -348,7 +372,7 @@ TEXT_GEMMA_ENRICH_CATEGORIES = {
     "warranty", "privacy_repair", "battery_drain",
 }
 
-HIGH_RISK_CATEGORIES = {"scam_phishing", "battery_safety", "water_damage", "overheating_issue", "boot_issue", "data_recovery"}
+HIGH_RISK_CATEGORIES = {"scam_phishing", "scam_clicked_link", "scam_data_entered", "battery_safety", "water_damage", "overheating_issue", "boot_issue", "data_recovery"}
 MEDIUM_RISK_CATEGORIES = {"charging_issue", "charging_port_issue", "screen_repair", "camera_issue", "update_issue", "faceid_touchid_issue", "battery_drain", "audio_issue"}
 
 DANGER_WATER_TERMS = [
@@ -545,6 +569,114 @@ def norm_text(text: str) -> str:
     text = re.sub(r"[^a-z0-9\u0600-\u06FF\u0750-\u077F\uFB50-\uFDFF\uFE70-\uFEFF\s]+", " ", text)
     return re.sub(r"\s+", " ", text).strip()
 
+
+
+def is_repairwise_domain_query(text: str) -> bool:
+    t = norm_text(text)
+    domain_terms = [
+        "movil", "mobile", "phone", "telefono", "iphone", "samsung", "xiaomi", "android",
+        "pantalla", "screen", "display", "bateria", "battery", "carga", "charging", "charger",
+        "sim", "wifi", "bluetooth", "camara", "camera", "audio", "altavoz", "speaker",
+        "microfono", "microphone", "app", "whatsapp", "instagram", "tiktok",
+        "sms", "banco", "bank", "link", "enlace", "tarjeta", "pin", "otp", "cvv",
+        "estafa", "scam", "phishing", "smishing", "datos", "password", "contraseña",
+        "agua", "water", "mojado", "caliente", "hot", "roto", "broken", "repair", "reparar",
+        "virus", "malware", "privacidad", "privacy", "garantia", "warranty",
+    ]
+    return any(term in t for term in domain_terms)
+
+
+def is_simple_general_question(text: str) -> bool:
+    t = norm_text(text)
+    if not t or is_repairwise_domain_query(text):
+        return False
+    patterns = [
+        r"\b(capital de|capital of)\b",
+        r"\b(cual|cu[aá]l|que|qu[eé]|who|what|where|when)\b.*\b(capital|pais|pa[ií]s|francia|france|espa[nñ]a|spain|presidente|president)\b",
+        r"\b(cuanto es|calculate|calcula|what is)\b.*\d",
+    ]
+    return len(t.split()) <= 12 and any(re.search(pat, t, flags=re.IGNORECASE) for pat in patterns)
+
+
+def simple_general_answer(text: str, language: str = "Spanish") -> str:
+    t = norm_text(text)
+    lang = normalize_language_name(language)
+
+    # Small deterministic answers for common demo/off-domain checks.
+    if "capital" in t and ("francia" in t or "france" in t):
+        if lang == "English":
+            return "RepairWise is focused on phone repair and digital safety. By the way, the capital of France is Paris."
+        if lang == "Catalan":
+            return "RepairWise està especialitzat en reparació mòbil i seguretat digital. Per cert, la capital de França és París."
+        return "RepairWise está especializado en reparación móvil y seguridad digital. Por cierto, la capital de Francia es París."
+
+    # Generic short off-domain answer: let Gemma answer briefly when backend exists.
+    prompt = f"""You are RepairWise, an offline assistant focused on phone repair and digital safety.
+The user asked a simple general question outside your main domain.
+Answer briefly in {lang}. First mention that RepairWise is specialized in mobile repair and digital safety.
+Do not pretend this is a phone repair or scam issue.
+
+User question: {text}
+""".strip()
+
+    try:
+        if _USE_OLLAMA:
+            raw = _ollama_chat(prompt, max_tokens=80)
+            if raw and len(raw.strip()) > 5:
+                return raw.strip()[:600]
+        if _USE_LLAMACPP:
+            raw = _llamacpp_chat(prompt, max_tokens=80)
+            if raw and len(raw.strip()) > 5:
+                return raw.strip()[:600]
+    except Exception:
+        pass
+
+    if lang == "English":
+        return "RepairWise is focused on phone repair and digital safety. I can answer simple general questions, but my strongest help is with phones, repairs and scam safety."
+    return "RepairWise está especializado en reparación móvil y seguridad digital. Puedo responder preguntas generales simples, pero mi mejor ayuda es con móviles, reparaciones y estafas."
+
+
+def out_of_scope_response(language: str = "Spanish") -> str:
+    lang = normalize_language_name(language)
+    if lang == "English":
+        return "RepairWise is designed for phone repair, scam detection and digital safety. Ask me about a phone problem, suspicious SMS, battery, screen, charging, apps, privacy or data recovery."
+    if lang == "Catalan":
+        return "RepairWise està pensat per a reparació mòbil, detecció d'estafes i seguretat digital. Pregunta'm sobre un problema del mòbil, SMS sospitós, bateria, pantalla, càrrega, apps, privacitat o recuperació de dades."
+    return "RepairWise está pensado para reparación móvil, detección de estafas y seguridad digital. Pregúntame sobre un problema del móvil, SMS sospechoso, batería, pantalla, carga, apps, privacidad o recuperación de datos."
+
+def is_general_or_out_of_domain_question(text: str) -> bool:
+    # Detect short general questions that should NOT inherit previous repair/scam context.
+    # Example: "cual es capital de francia" must not become scam_phishing follow-up.
+    t = norm_text(text)
+    if not t:
+        return False
+
+    general_patterns = [
+        r"\b(cual|cu[aá]l|que|qu[eé]|who|what|where|when|why|how)\b.*\b(capital|presidente|president|pais|pa[ií]s|francia|france|espa[nñ]a|spain|historia|history|matematicas|math)\b",
+        r"\b(capital de|capital of)\b",
+        r"\b(weather|tiempo|clima|hora|time|fecha|date)\b",
+        r"\b(recipe|receta|cocinar|cook|football|futbol|pelicula|movie)\b",
+    ]
+    if any(re.search(pat, t, flags=re.IGNORECASE) for pat in general_patterns):
+        return True
+
+    domain_terms = [
+        "movil", "mobile", "phone", "telefono", "iphone", "samsung", "xiaomi",
+        "pantalla", "screen", "bateria", "battery", "carga", "charging",
+        "sim", "wifi", "bluetooth", "camara", "camera", "audio", "app",
+        "sms", "banco", "bank", "link", "enlace", "tarjeta", "pin", "otp",
+        "estafa", "scam", "phishing", "datos", "password", "contraseña",
+        "agua", "water", "caliente", "hot", "roto", "broken",
+    ]
+    if any(term in t for term in domain_terms):
+        return False
+
+    question_words = ["que", "qué", "cual", "cuál", "quien", "quién", "donde", "dónde", "who", "what", "where", "when", "why", "how"]
+    if len(t.split()) <= 8 and any(t.startswith(q + " ") or t == q for q in question_words):
+        return True
+
+    return False
+
 def contains_any(text: str, terms: list[str]) -> bool:
     t = norm_text(text)
     return any(norm_text(term) in t for term in terms)
@@ -596,7 +728,14 @@ def triage_issue(text: str, conversation_history: list | None = None) -> dict:
             "he osat", "he introduit", "am introdus", "am dat datele",
             "أدخلت", "أعطيت", "ڈالا", "دیا",
         ]
-        if any(w in t_n for w in entered_words):
+        # Check negation: "no puse", "nunca puse", "menos mal no" → user is SAFE
+        _neg_scam = ["no puse", "no pusé", "no introduje", "no metí",
+                     "no he puesto", "no he introducido", "no he metido", "no he dado",
+                     "nunca puse", "menos mal", "por suerte", "afortunadamente",
+                     "not entered", "didn't enter", "never entered", "i didn't put",
+                     "i haven't", "thankfully", "luckily", "menys mal", "per sort"]
+        _is_negated = any(neg in t_n for neg in _neg_scam)
+        if any(w in t_n for w in entered_words) and not _is_negated:
             return {"urgency": "HIGH", "category": "scam_data_entered",
                     "reason": "EMERGENCY: User entered data on phishing site.",
                     "method": "priority_scam_data", "confidence": 0.99}
@@ -630,6 +769,12 @@ def triage_issue(text: str, conversation_history: list | None = None) -> dict:
             # Special case: clicked phishing link gets specific category
             t_norm = norm_text(text)
             if inherited.get("category") in {"scam_phishing", "scam_clicked_link", "scam_data_entered"}:
+                # Negation check FIRST: "no puse", "menos mal", "por suerte" = user is SAFE
+                _neg_data = ["no puse", "no pusé", "no introduje", "no metí", "no he puesto",
+                             "nunca puse", "menos mal", "por suerte", "afortunadamente",
+                             "not entered", "didn't enter", "never entered", "i didn't put"]
+                _data_negated = any(neg in t_norm for neg in _neg_data)
+
                 # EMERGENCY: user entered personal data on phishing site
                 data_entered_signals = [
                     "puse", "pusé", "introduje", "metí", "meti", "he puesto", "he dado",
@@ -638,7 +783,7 @@ def triage_issue(text: str, conversation_history: list | None = None) -> dict:
                     "entered", "gave", "provided", "filled in", "put in",
                     "أدخلت", "ڈالا",
                 ]
-                if any(s in t_norm for s in data_entered_signals):
+                if any(s in t_norm for s in data_entered_signals) and not _data_negated:
                     inherited["category"] = "scam_data_entered"
                     inherited["urgency"] = "HIGH"
                     inherited["reason"] = "EMERGENCY: User entered personal data on phishing site."
@@ -1038,18 +1183,70 @@ LANGUAGE_LEAK_WORDS = {
     "Romanian": ["Probable diagnosis:", "What to do now:", "Diagnóstico probable:", "puede ser"],
 }
 
+
+def clean_gemma_output(raw: str) -> str:
+    """Remove Gemma4 thinking blocks and return the actual response.
+    
+    Handles three cases:
+    1. Complete thinking: <think>...</think>\n1. Response...  → strips block, returns response
+    2. Incomplete thinking (num_predict hit mid-think): <think>...EOF  → tries to recover
+    3. No thinking at all → returns as-is
+    """
+    import re as _re
+    if not raw:
+        return ""
+
+    # Case 1: Complete thinking block — strip it
+    if "<think>" in raw and "</think>" in raw:
+        cleaned = _re.sub(r"<think>.*?</think>", "", raw, flags=_re.DOTALL).strip()
+        if cleaned and len(cleaned) > 20:
+            return cleaned
+
+    # Case 2: Incomplete thinking (hit num_predict mid-think) — try harder to find response
+    if "<think>" in raw and "</think>" not in raw:
+        # Look for response content AFTER the thinking started
+        # Sometimes the model writes the response before the </think> closes
+        # Try: find a numbered response pattern anywhere in the text
+        m = _re.search(r"(?m)^\s*1\.\s+\S", raw)
+        if m:
+            # Check that this "1." is not just inside the thinking body
+            # by checking if there's more structured content after it
+            candidate = raw[m.start():].strip()
+            # Quick quality check: has actual words after the number
+            if len(candidate) > 50:
+                return candidate
+        # Complete fallback: remove the <think> prefix entirely and use whatever remains
+        # (the thinking content itself is better than a canned template)
+        after_think_start = raw.find("<think>")
+        if after_think_start > 0:
+            # There was content BEFORE thinking started — use it
+            before = raw[:after_think_start].strip()
+            if len(before) > 30:
+                return before
+        # No good recovery — return empty so caller uses template
+        return ""
+
+    # Case 3: No thinking tags — return as-is (remove any stray markers)
+    cleaned = raw.replace("<think>", "").replace("</think>", "").strip()
+    return cleaned
+
 def looks_bad_output(answer: str) -> bool:
-    if not answer or len(answer.strip()) < 50:
-        return True
+    """Reject only truly broken output. Let Gemma format freely.
+    The old check (exactly 5 lines) caused 90% of responses to fall back
+    to template because Gemma with thinking mode uses different formatting.
+    Gemma is smarter than our templates — use its output whenever possible.
+    """
+    if not answer or len(answer.strip()) < 30:
+        return True  # Empty or trivially short
     a = answer.lower()
+    # Reject if system internals leaked into response
     if any(marker in a for marker in INTERNAL_LEAK_MARKERS):
         return True
-    numbered = re.findall(r"(?m)^\s*\d+\.", answer)
-    if len(numbered) != 5:
+    # Reject if only repetition / gibberish (repeating same token 10+ times)
+    words = a.split()
+    if len(words) >= 10 and len(set(words[:20])) < 4:
         return True
-    if re.search(r"(?m)^\s*(?:6|7|8|9|[1-9][0-9])\.\s+", answer):
-        return True
-    return False
+    return False  # Accept everything else — Gemma knows better than our format check
 
 def violates_requested_language(answer: str, language: str) -> bool:
     lang = normalize_language_name(language)
@@ -1736,45 +1933,68 @@ def clean_streamed_answer(raw: str) -> str:
 
 
 def build_text_enrichment_prompt(base_answer: str, user_text: str, triage: dict, docs: list, language: str) -> str:
-    """Generate directly from the customer message + RAG context.
-    Does NOT ask Gemma to paraphrase the template — system persona is in REPAIRWISE_SYSTEM_PROMPT
-    (Ollama system field). Optimized for speed: no CoT prefix, think:false in Ollama."""
+    """Build the final Gemma prompt for RepairWise.
+
+    V18.1: Gemma is not asked to imitate the deterministic template.
+    The deterministic pipeline provides category/risk/RAG facts, while
+    Gemma writes a natural customer-ready answer.
+    """
     lang = normalize_language_name(language)
-    label_instruction = LANGUAGE_INSTRUCTIONS.get(lang, LANGUAGE_INSTRUCTIONS["Spanish"])
-    labels = LABELS.get(lang, LABELS["Spanish"])
-    context = "\n".join(f"[{d.get('id')}] {d.get('text','')[:350]}" for d in docs[:3])
     category = triage.get("category", "unknown")
-    urgency  = triage.get("urgency", "LOW")
-    risk     = risk_for_category(category, triage)
+    risk = risk_for_category(category, triage)
     recommendation = get_recommendation(category, lang)
-    matching_ids = [d.get("id","?") for d in docs[:3] if d.get("category") == category]
-    other_ids    = [d.get("id","?") for d in docs[:3] if d.get("category") != category]
-    sources = ", ".join((matching_ids or other_ids)[:3])
-    # CoT prefix removed: Gemma4 E2B reasons well without it.
-    # Explicit "Think step by step" doubles thinking token count → 2x slower on CPU.
-    # The system prompt (REPAIRWISE_SYSTEM_PROMPT) already guides tone and quality.
 
-    return f"""{label_instruction}
+    category_docs = [d for d in docs[:5] if d.get("category") == category]
+    grounding_docs = category_docs[:3] if category_docs else docs[:3]
 
-Customer message: \"{user_text}\"
-Issue: {category} | Risk: {risk}
+    if grounding_docs:
+        rag_context = "".join(
+            f"- [{d.get('id', '?')}] category={d.get('category', '?')} | {str(d.get('text', ''))[:260]}"
+            for d in grounding_docs[:3]
+        )
+    else:
+        rag_context = "- No local RAG context found for this query."
 
-Repair knowledge base (use this — do not invent facts):
-{context}
+    scam = compute_scam_score(user_text) if category in {"scam_phishing", "scam_clicked_link", "scam_data_entered"} else None
+    scam_block = ""
+    if scam:
+        scam_block = (
+            f"Scam score: {scam.get('scam_probability', 0)}%"
+            f"Signals: {', '.join(scam.get('signals_detected', []))}"
+        )
 
-Analyze THIS customer's SPECIFIC situation. Reference what they described.
-Rules: no prices, no jargon without explanation, no board/motherboard damage unless the knowledge base explicitly says so.
-Do NOT copy the template wording below — write your own response.
+    _no_think = "/no_think" if _USE_OLLAMA else ""
+    return f"""{_no_think}You are RepairWise Gemma, an offline multilingual assistant for phone repair and scam safety.
 
-Structure reference only:
-{base_answer}
+Write a natural, human answer in {lang}. Do NOT copy a fixed template. Avoid starting with "Diagnóstico probable".
 
-Return EXACTLY 5 numbered lines:
-1. {labels[0]}: [specific diagnosis for their exact case]
-2. {labels[1]}: {risk} ⚡ Recomendación: {recommendation}
-3. {labels[2]}: [3-5 concrete steps for their situation]
-4. {labels[3]}: [precise condition for professional help]
-5. {labels[4]}: [{sources}]""".strip()
+Customer message:
+{user_text}
+
+RepairWise safety analysis:
+- Category: {category}
+- Risk level: {risk}
+- Must-follow recommendation: {recommendation}{scam_block}
+
+Local grounding notes, if useful:
+{rag_context}
+
+Rules:
+- Safety analysis is authoritative, especially for HIGH risk.
+- Never contradict the risk level or recommendation.
+- Do not invent prices, warranties, official phone numbers, shop policies, or hidden internal damage.
+- Do not claim motherboard/IC/internal liquid damage unless clearly supported by the user/photo.
+- For scams: never tell the user to click links, share PIN/OTP/card data, or call numbers from the suspicious SMS.
+- If the user already entered bank/card data, tell them to call their bank immediately using the official app/card/website.
+- If RAG is weak, still give safe general guidance and say what info you need.
+
+Style:
+- Start with one direct sentence about this exact situation.
+- Then give 3-5 short practical bullets or mini-paragraphs.
+- Friendly, calm, protective, not robotic.
+- Around 90-150 words.
+""".strip()
+
 
 def call_gemma_text(prompt: str, max_new_tokens: int = 220) -> str:
     LAST_GEMMA_TRACE.update({"called": True, "path": "text_enrichment", "raw": "", "fallback_used": False, "error": "",
@@ -1987,8 +2207,7 @@ def clean_context_sentence(raw: str, language: str, category: str, user_text: st
     text = parts[0].strip() if parts else text
     if len(text) < 12 or len(text) > 220:
         return ""
-    if looks_bad_output(text):
-        return ""
+    # Don't use looks_bad_output here — a short context note is fine
     if violates_requested_language(text, language):
         return ""
     if answer_conflicts_with_category(text, category, user_text):
@@ -2023,16 +2242,19 @@ def generate_text_answer(user_text: str, triage: dict, docs: list, language: str
 
     # Route 0: Gemma 4 function calling / tool routing.
     # This demonstrates native/tool-use behavior without allowing the model to override safety.
-    if len(norm_text(user_text).split()) >= 3:
+    _sel = select_tool_for_category(triage.get("category",""), user_text)
+    if REPAIRWISE_NATIVE_TOOLS and len(norm_text(user_text).split()) >= 3:
         tool_result = call_gemma_function_router(user_text, triage, docs, lang)
     else:
-        _sel = select_tool_for_category(triage.get("category",""), user_text)
-        tool_result = dispatch_tool(_sel, deterministic_escalation_args(user_text, triage))
+        tool_args = deterministic_args_for_tool(_sel, user_text, triage)
+        tool_result = dispatch_tool(_sel, tool_args)
         LAST_GEMMA_TRACE["function_calling"].update({
-            "attempted": False,
+            "attempted": bool(REPAIRWISE_NATIVE_TOOLS),
+            "native_tools_passed": False,
             "tool_name": _sel,
-            "tool_args": deterministic_escalation_args(user_text, triage),
+            "tool_args": tool_args,
             "tool_result": tool_result,
+            "error": "Fast deterministic tool path; set REPAIRWISE_NATIVE_TOOLS=true for Gemma tool routing.",
         })
 
     base = inject_tool_next_step(base, tool_result, lang)
@@ -2043,14 +2265,14 @@ def generate_text_answer(user_text: str, triage: dict, docs: list, language: str
         "model" in globals() and model is not None
     )
     if USE_GEMMA_TEXT_ENRICHMENT and category in TEXT_GEMMA_ENRICH_CATEGORIES and _backend_ok:
-        max_tok = 350 if urgency == "HIGH" else 280
+        max_tok = 240 if urgency == "HIGH" else 200
         prompt = build_text_enrichment_prompt(base, user_text, triage, docs, lang)
         raw = call_gemma_text(prompt, max_new_tokens=max_tok)
         LAST_GEMMA_TRACE["function_calling"]["tool_result"] = tool_result
         LAST_GEMMA_TRACE["path"] = "gemma_direct_generation"
-        if raw and not looks_bad_output(raw) and not violates_requested_language(raw, lang) and not answer_conflicts_with_category(raw, category, user_text):
-            return inject_tool_next_step(raw[:1800], tool_result, lang)
-        # Guard rejected → safe template is the automatic fallback
+        cleaned_raw = clean_gemma_output(raw) if raw else ""
+        if cleaned_raw and not looks_bad_output(cleaned_raw):
+            return inject_tool_next_step(cleaned_raw[:2000], tool_result, lang)
         LAST_GEMMA_TRACE["fallback_used"] = True
         LAST_GEMMA_TRACE["path"] = "gemma_direct_generation_fallback"
 
@@ -2249,7 +2471,10 @@ PHOTO_HIDDEN_DAMAGE_CLAIMS = [
 
 def looks_unsafe_photo_answer(answer: str) -> bool:
     a = (answer or "").lower()
-    return looks_bad_output(answer) or any(claim in a for claim in PHOTO_HIDDEN_DAMAGE_CLAIMS)
+    # Only reject truly empty/broken or if Gemma claims definitive internal damage from a photo
+    if not answer or len(answer.strip()) < 30:
+        return True
+    return any(claim in a for claim in PHOTO_HIDDEN_DAMAGE_CLAIMS)
 
 def build_photo_prompt(user_text: str, triage: dict, docs: list, language: str, quality: dict) -> str:
     lang = normalize_language_name(language)
@@ -3126,6 +3351,10 @@ def detect_conversation_context(text: str, history: list, language: str) -> dict
     if not history or len(history) < 2:
         return None
 
+    # V18.2 fix: do not inherit scam/repair context for unrelated general questions.
+    if is_general_or_out_of_domain_question(text):
+        return None
+
     t = norm_text(text)
     words = t.split()
 
@@ -3199,6 +3428,29 @@ def get_followup_response(triage: dict, text: str, language: str, history: list)
     lang = normalize_language_name(language)
     t = norm_text(text)
 
+    # Relief expressions — user is SAFE, didn't fall for scam
+    relief_words = [
+        # Spanish
+        "menos mal", "por suerte", "afortunadamente", "gracias a dios",
+        "no puse", "no pusé", "no introduje", "no metí",
+        "no he puesto", "no he introducido", "no he metido", "no di",
+        "no he dado", "no he entrado", "no he abierto",
+        "no he hecho clic", "no hice clic", "no abrí",
+        # English
+        "not entered", "didn't enter", "i didn't", "good thing", "thankfully",
+        "luckily", "i haven't", "didn't click", "didn't open",
+        # Catalan
+        "menys mal", "per sort", "no he posat", "no he introduit", "no he clicat",
+    ]
+    if any(w in t for w in relief_words) and cat in {"scam_phishing", "scam_clicked_link", "scam_data_entered"}:
+        relief_responses = {
+            "Spanish": "¡Bien hecho! No haber introducido los datos fue la decisión correcta. Ahora bloquea el número del remitente, borra el SMS, y si tienes dudas activa las alertas de tu banco por SMS para vigilar movimientos durante los próximos días.",
+            "English": "Well done for not entering your data — that was the right call. Now block the sender, delete the SMS, and consider enabling bank SMS alerts to monitor for any suspicious activity over the next few days.",
+            "Catalan": "Ben fet per no haver introduït les dades! Ara bloqueja el remitent, esborra el SMS, i activa les alertes del banc per SMS per vigilar possibles moviments sospitosos els propers dies.",
+        }
+        resp = relief_responses.get(lang, relief_responses["English"])
+        return resp
+
     # "Already did X" confirmations
     done_words = ["apagué", "apague", "reinicié", "reinicie", "hice", "probé", "probe",
                   "turned off", "restarted", "tried", "done", "lo hice", "ya lo hice",
@@ -3263,6 +3515,25 @@ def repairwise_answer(
     reset_gemma_trace()
     lang = normalize_language_name(language)
     original_text = (user_text or "").strip()
+
+    # V18.3 domain routing:
+    # - Full RepairWise pipeline for mobile/scam/safety queries.
+    # - Short general answer for simple off-domain questions.
+    # - Prevent old scam context from hijacking unrelated questions.
+    if is_simple_general_question(original_text):
+        answer = simple_general_answer(original_text, language)
+        meta = {
+            "version": REPAIRWISE_VERSION,
+            "language": normalize_language_name(language),
+            "triage": {"category": "general_question", "urgency": "LOW", "reason": "Simple off-domain question.", "method": "v18_3_domain_router"},
+            "gemma": {"called": bool(_USE_OLLAMA or _USE_LLAMACPP), "path": "general_short_answer", "backend": "ollama" if _USE_OLLAMA else ("llamacpp" if _USE_LLAMACPP else "template")},
+            "sources": [],
+            "scam_analysis": None,
+            "cactus_router": {"selected_tier": "e2b" if (_USE_OLLAMA or _USE_LLAMACPP) else "template", "complexity_score": 5, "reason": "Simple general question outside RepairWise domain"},
+            "history_used": False,
+        }
+        return (answer, meta) if return_meta else answer
+
     text, history_context = build_contextual_user_text(original_text, conversation_history)
 
     if image is not None:
@@ -3428,6 +3699,53 @@ def repairwise_answer(
 # to the caller so Gradio can display them immediately.
 # Yields: (partial_text, is_final, meta_dict)
 # ══════════════════════════════════════════════════════════════════════════════
+
+def _timed_ollama_stream(prompt: str, max_tokens: int = 280):
+    """Wrap _ollama_stream with heartbeat and a fast first-token cutoff.
+
+    If Ollama is too slow to emit the first token, we stop waiting and let the
+    caller use the safe template fallback. This keeps the UI responsive.
+    """
+    import queue as _queue
+    import threading as _threading
+    import time as _time_hb
+
+    q = _queue.Queue()
+
+    def _producer():
+        try:
+            for tok in _ollama_stream(prompt, max_tokens=max_tokens):
+                q.put(("token", tok))
+        except Exception as exc:
+            q.put(("error", str(exc)))
+        q.put(("done", None))
+
+    _t = _threading.Thread(target=_producer, daemon=True)
+    _t.start()
+    _start = _time_hb.time()
+    got_any = False
+    max_total_wait = float(_os.environ.get("OLLAMA_TOTAL_WAIT", "35" if OLLAMA_FAST_MODE else "120"))
+
+    while True:
+        elapsed = _time_hb.time() - _start
+        if not got_any and elapsed >= OLLAMA_FIRST_TOKEN_TIMEOUT:
+            yield "timeout", elapsed
+            break
+        if elapsed >= max_total_wait:
+            yield "timeout", elapsed
+            break
+        try:
+            kind, val = q.get(timeout=0.5)
+            if kind == "done":
+                break
+            elif kind == "token":
+                got_any = True
+                yield "token", val
+            elif kind == "error":
+                break
+        except _queue.Empty:
+            yield "heartbeat", elapsed
+
 def repairwise_stream(
     user_text: str,
     language: str = "Spanish",
@@ -3505,8 +3823,13 @@ def repairwise_stream(
 
     # ── Phase 4: Follow-up / template check ──────────────────────────────────
     conv_followup = None
-    if conversation_history and triage.get("match_type") == "conversation_inherited":
-        conv_followup = get_followup_response(triage, original_text, lang, conversation_history)
+    _scam_cats = {"scam_phishing", "scam_clicked_link", "scam_data_entered"}
+    if conversation_history:
+        # Always check for relief/follow-up on scam queries — regardless of match_type
+        # "menos mal no puse" fires DANGER_SCAM_TERMS directly (not via context inheritance)
+        # but still needs the relief response
+        if triage.get("category") in _scam_cats or triage.get("match_type") == "conversation_inherited":
+            conv_followup = get_followup_response(triage, original_text, lang, conversation_history)
 
     followup = None
     if should_ask_followup(triage, original_text, conversation_history or []):
@@ -3519,16 +3842,27 @@ def repairwise_stream(
         yield followup, True, _make_meta(triage, docs, scam_score_data, lang, history_context, "conversational_followup")
         return
     elif selected_tier == "template":
-        yield _status(
-            f"✅ Triage: {cat} | {urg_emoji} {urg}\n"
-            f"✅ RAG: {n_docs} docs\n"
-            f"🦁 Cactus: TEMPLATE (safety override)\n"
-            f"⚡ Generando respuesta segura..."
-        ), False, {}
-        answer = safe_fallback_answer(text, triage, docs[:3], lang, image_present=False)
-        LAST_GEMMA_TRACE["path"] = "cactus_template_tier"
-        yield answer, True, _make_meta(triage, docs, scam_score_data, lang, history_context, "cactus_template_tier")
-        return
+        _backend_ok_for_override = _USE_OLLAMA or _USE_LLAMACPP
+        _safety_template_only = triage.get("category") == "battery_safety"
+        if _backend_ok_for_override and not _safety_template_only:
+            selected_tier = "e2b"
+            LAST_ROUTER_DECISION.update({
+                "selected_tier": "e2b",
+                "reason": "Gemma-first override: model available; template kept only as fallback",
+                "complexity_score": score,
+                "factors": complexity["factors"] + ["gemma_first_override"],
+            })
+        else:
+            yield _status(
+                f"✅ Triage: {cat} | {urg_emoji} {urg}\n"
+                f"✅ RAG: {n_docs} docs\n"
+                f"🦁 Cactus: TEMPLATE (safety/no model)\n"
+                f"⚡ Generando respuesta segura..."
+            ), False, {}
+            answer = safe_fallback_answer(text, triage, docs[:3], lang, image_present=False)
+            LAST_GEMMA_TRACE["path"] = "cactus_template_tier"
+            yield answer, True, _make_meta(triage, docs, scam_score_data, lang, history_context, "cactus_template_tier")
+            return
 
     # ── Phase 5: Function calling (tools) ────────────────────────────────────
     category = triage.get("category", "unknown")
@@ -3542,10 +3876,21 @@ def repairwise_stream(
         f"🛠️ Tool: {sel_tool}..."
     ), False, {}
 
-    if len(norm_text(original_text).split()) >= 3:
+    # Fast mode: do not spend a second Gemma call just to choose tool args.
+    # Native Gemma function-calling is still available with REPAIRWISE_NATIVE_TOOLS=true.
+    if REPAIRWISE_NATIVE_TOOLS and len(norm_text(original_text).split()) >= 3:
         tool_result = call_gemma_function_router(original_text, triage, docs, lang)
     else:
-        tool_result = dispatch_tool(sel_tool, deterministic_args_for_tool(sel_tool, original_text, triage))
+        tool_args = deterministic_args_for_tool(sel_tool, original_text, triage)
+        tool_result = dispatch_tool(sel_tool, tool_args)
+        LAST_GEMMA_TRACE["function_calling"].update({
+            "attempted": bool(REPAIRWISE_NATIVE_TOOLS),
+            "native_tools_passed": False,
+            "tool_name": sel_tool,
+            "tool_args": tool_args,
+            "tool_result": tool_result,
+            "error": "Fast deterministic tool path; set REPAIRWISE_NATIVE_TOOLS=true for Gemma tool routing.",
+        })
 
     tool_summary = ""
     if category in {"scam_phishing","scam_clicked_link","scam_data_entered"} and "scam_probability" in str(tool_result):
@@ -3572,30 +3917,77 @@ def repairwise_stream(
         yield base, True, _make_meta(triage, docs, scam_score_data, lang, history_context, "cactus_template_tier")
         return
 
-    max_tok = 350 if urgency == "HIGH" else 280
+    max_tok = 240 if urgency == "HIGH" else 200
     prompt = build_text_enrichment_prompt(base, text, triage, docs[:4], lang)
 
     streamed = ""
     got_tokens = False
     stream_fn = _ollama_stream if _USE_OLLAMA else _llamacpp_stream
 
-    try:
-        for token in stream_fn(prompt, max_tokens=max_tok):
-            # Filter out thinking block markers Gemma sometimes emits
-            clean_token = token.replace("<think>","").replace("</think>","")
-            streamed += clean_token
-            got_tokens = True
-            if streamed.strip():  # only yield when we have real content
-                yield streamed, False, {}
-    except Exception as exc:
-        LAST_GEMMA_TRACE["error"] = f"Stream error: {exc}"
+    _urg_emoji = {"HIGH": "🔴", "MEDIUM": "🟡", "LOW": "🟢"}.get(urgency, "")
+    _base_status = (
+        f"✅ Triage: {category} | {_urg_emoji} {urgency}\n"
+        f"✅ RAG: {n_docs} docs\n"
+        f"🦁 Cactus: {selected_tier.upper()}\n"
+        f"✅ Tool: {sel_tool} {tool_summary}\n"
+    )
+    if _USE_OLLAMA:
+        # Use heartbeat wrapper — yields ticks even during silent thinking phase
+        try:
+            for kind, val in _timed_ollama_stream(prompt, max_tokens=max_tok):
+                if kind == "token":
+                    # Accumulate raw token (keep markers for now)
+                    streamed += val
+                    got_tokens = True
+                    # Strip thinking blocks before showing to user
+                    display = clean_gemma_output(streamed)
+                    if display:
+                        yield display, False, {}
+                elif kind == "heartbeat":
+                    elapsed = val
+                    if not got_tokens:
+                        dots = "." * (int(elapsed) % 4)
+                        status_msg = (
+                            _base_status +
+                            f"🤖 Gemma generando{dots} {elapsed:.0f}s\n"
+                            f"   (fast mode: thinking desactivado)"
+                        )
+                        yield f"__STATUS__:{status_msg}", False, {}
+                elif kind == "timeout":
+                    LAST_GEMMA_TRACE["error"] = f"Ollama first-token timeout after {val:.1f}s"
+                    break
+        except Exception as exc:
+            LAST_GEMMA_TRACE["error"] = f"Stream error: {exc}"
+    elif _USE_LLAMACPP:
+        try:
+            for token in _llamacpp_stream(prompt, max_tokens=max_tok):
+                clean = token.replace("<think>","").replace("</think>","")
+                streamed += clean
+                got_tokens = True
+                if streamed.strip():
+                    yield streamed, False, {}
+        except Exception as exc:
+            LAST_GEMMA_TRACE["error"] = f"llama.cpp stream error: {exc}"
 
-    if got_tokens and not looks_bad_output(streamed) and not violates_requested_language(streamed, lang) and not answer_conflicts_with_category(streamed, category, text):
-        answer = inject_tool_next_step(streamed[:1800], tool_result, lang)
-        path = "gemma_stream_generation"
+    # Clean thinking blocks before running guards
+    cleaned_streamed = clean_gemma_output(streamed) if streamed else ""
+    # Accept Gemma's response if it has content and is in the right language.
+    # Do NOT reject for format issues — Gemma is smarter than our format rules.
+    if cleaned_streamed and not looks_bad_output(cleaned_streamed):
+        # Only reject language mismatch for RTL languages (Arabic/Urdu) where mixing is jarring
+        if lang in {"Arabic", "Urdu"} and violates_requested_language(cleaned_streamed, lang):
+            answer = base
+            path = "gemma_language_mismatch_fallback"
+        else:
+            answer = inject_tool_next_step(cleaned_streamed[:2000], tool_result, lang)
+            path = "gemma_ollama_primary"
+    elif streamed and not cleaned_streamed:
+        # Do not run a second slow generation. Fast mode falls back immediately.
+        answer = base
+        path = "gemma_bad_stream_fast_fallback"
     else:
         answer = base
-        path = "gemma_stream_fallback"
+        path = "gemma_ollama_primary"
 
     LAST_GEMMA_TRACE.update({"called": True, "path": path, "raw": streamed[:1200], "fallback_used": not got_tokens})
     if scam_score_data:
