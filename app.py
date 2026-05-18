@@ -15,7 +15,7 @@ from transformers import AutoProcessor, AutoModelForImageTextToText
 
 # ── Load data pack and engine ─────────────────────────────────────────────────
 from data_pack import LOCAL_KNOWLEDGE, CATEGORY_RESPONSE_TEMPLATES, PHOTO_VISUAL_CATEGORIES, SECTION_LABELS
-from engine import rebuild_repairwise_indexes, try_init_semantic_retriever, repairwise_answer, repairwise_debug, REPAIRWISE_VERSION
+from engine import rebuild_repairwise_indexes, try_init_semantic_retriever, repairwise_answer, repairwise_debug, repairwise_stream, REPAIRWISE_VERSION
 
 # ── Model configuration ───────────────────────────────────────────────────────
 MODEL_ID   = os.environ.get("MODEL_ID", "abdullahfasih/repairwise-gemma4-e2b-lora")
@@ -26,9 +26,15 @@ model      = None
 
 def load_model():
     global processor, model, DEMO_MODE
-    if not torch.cuda.is_available():
+    # Allow Ollama/llama.cpp to bypass DEMO_MODE even without CUDA
+    OLLAMA_ACTIVE = os.environ.get("REPAIRWISE_BACKEND", "").lower() in ("ollama", "llamacpp")
+    if not torch.cuda.is_available() and not OLLAMA_ACTIVE:
         print("⚠️  No GPU — DEMO MODE (template responses)")
         DEMO_MODE = True
+        return
+    if OLLAMA_ACTIVE:
+        print(f"✅ Ollama/llama.cpp backend active — skipping GPU check")
+        DEMO_MODE = False
         return
     BASE_MODEL = "google/gemma-4-e2b"
     IS_LORA = any(x in MODEL_ID.lower() for x in ["lora", "repairwise", "finetune"])
@@ -154,7 +160,18 @@ def format_answer_with_visual(answer: str, meta: dict) -> str:
         color   = "🟥" if prob >= 70 else "🟧" if prob >= 40 else "🟨"
         bar     = color * filled + "⬜" * (10 - filled)
         meter_label, signals_label = SCAM_METER_LABELS.get(lang, SCAM_METER_LABELS["English"])
-        signals = ", ".join(scam.get("signals_detected", [])[:3])
+        raw_signals = scam.get("signals_detected", [])[:3]
+        SIGNAL_EMOJI = {
+            "data_request": "🔴 data_request",
+            "suspicious_url": "⚠️ suspicious_url",
+            "impersonation": "🔴 impersonation",
+            "urgency_lang": "⚠️ urgency",
+            "threatening": "🔴 threatening",
+            "free_offer": "⚠️ free_offer",
+            "grammar_issues": "⚠️ grammar",
+        }
+        signals = ", ".join(SIGNAL_EMOJI.get(s, s) for s in raw_signals)
+        verdict = scam.get("verdict", "")
         prefix += f"\n**{meter_label}: {prob}%**\n{bar} {prob}%\n"
         if signals:
             prefix += f"*{signals_label}: {signals}*\n"
@@ -171,10 +188,27 @@ def format_answer_with_visual(answer: str, meta: dict) -> str:
     return prefix + answer
 
 
+def _make_status_bubble(text: str) -> str:
+    """Format a __STATUS__: message as a styled progress indicator."""
+    lines = text.replace("__STATUS__:", "").strip().split("\n")
+    formatted = []
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+        formatted.append(f"  {line}")
+    body = "\n".join(formatted)
+    return f"```\n{body}\n```"
+
+
 def repairwise_chat(user_text, language, image, history):
-    """Main handler — returns updated chatbot history and debug info."""
+    """True streaming handler with live pipeline status.
+    Each pipeline phase (triage, RAG, tools, Gemma) yields an update
+    so judges see the AI working in real-time — no frozen screen.
+    """
     if not user_text or len(user_text.strip()) < 2:
-        return history, "", "", "", ""
+        yield history, "", "", "", ""
+        return
 
     pil_image = None
     if image is not None:
@@ -183,43 +217,61 @@ def repairwise_chat(user_text, language, image, history):
         except Exception:
             pass
 
-    # Build conversation history for context
-    # Build conversation history for engine multi-turn + follow-up system
-    # Engine expects: [{"role": "user", "content": "..."}, {"role": "assistant", "content": "..."}]
-    # Build conversation history — handle both Gradio 5 (dicts) and legacy (tuples)
     conv_history = []
     for msg in (history or []):
         if isinstance(msg, dict):
-            # Gradio 5 messages format: {"role": "user/assistant", "content": "..."}
             conv_history.append({"role": msg.get("role", "user"), "content": str(msg.get("content", ""))})
         elif isinstance(msg, (list, tuple)) and len(msg) == 2:
-            # Legacy tuples format: [user_text, bot_text]
             if msg[0]: conv_history.append({"role": "user", "content": str(msg[0])})
             if msg[1]: conv_history.append({"role": "assistant", "content": str(msg[1])})
 
+    lang = language or "Spanish"
+
+    def _live(content):
+        """Build history with current live content in last assistant msg."""
+        return list(history or []) + [
+            {"role": "user", "content": user_text},
+            {"role": "assistant", "content": content},
+        ]
+
+    # ── Instant: show user msg + initial spinner ──────────────────────────────
+    yield _live("⏳ Iniciando análisis..."), "⏳ Procesando...", "", "", ""
+
+    answer = ""
+    meta   = {}
+    panel_live = "⏳ Procesando..."
+
     try:
-        # repairwise_debug returns (answer, meta) tuple
-        result = repairwise_debug(user_text, language=language, image=pil_image, conversation_history=conv_history)
-        if isinstance(result, tuple):
-            answer, meta = result[0], result[1] if len(result) > 1 else {}
-        else:
-            answer, meta = str(result), {}
-        triage = meta.get("triage", {})
-        docs   = meta.get("docs", [])
+        for chunk, is_final, meta in repairwise_stream(
+            user_text, language=lang, image=pil_image, conversation_history=conv_history
+        ):
+            if is_final:
+                answer = chunk
+                break
+
+            if chunk.startswith("__STATUS__:"):
+                # Pipeline status update — show as formatted progress block
+                status_display = _make_status_bubble(chunk)
+                panel_live = chunk.replace("__STATUS__:", "").strip()
+                yield _live(status_display), panel_live, "", "", ""
+            else:
+                # Actual tokens arriving — show directly in chatbot
+                # First token: clear the status block and start showing answer
+                yield _live(chunk), panel_live, "", "", ""
+
     except Exception as e:
         answer = f"Error: {str(e)[:200]}"
-        meta, triage, docs = {}, {}, []
+        meta = {}
 
-    # Update chatbot history
-    # Gradio 5 messages format
-    # Apply visual formatting (scam meter, risk banner)
+    triage = meta.get("triage", {})
+
+    # ── Phase 3: final answer + visual formatting + debug panel ──────────────
     visual_answer = format_answer_with_visual(answer, meta)
     history = list(history or []) + [
         {"role": "user", "content": user_text},
         {"role": "assistant", "content": visual_answer},
     ]
 
-    # Format judge panel
     gemma        = meta.get("gemma", {})
     fc           = gemma.get("function_calling", {})
     sources_list = meta.get("sources", [])
@@ -227,7 +279,6 @@ def repairwise_chat(user_text, language, image, history):
     scam         = meta.get("scam_analysis") or {}
     is_demo      = DEMO_MODE
 
-    # Function calling status
     fc_tool   = fc.get("tool_name", "")
     fc_result = str(fc.get("tool_result", {}))[:90]
     if is_demo and not fc_tool:
@@ -237,10 +288,8 @@ def repairwise_chat(user_text, language, image, history):
     else:
         fc_status = "Not triggered"
 
-    # RAG: show matching category docs first, then fill with best non-matching
     triage_cat = triage.get("category", "")
     rag_matching = [d.get("id","?") for d in sources_list if d.get("category") == triage_cat][:3]
-    rag_other    = [d.get("id","?") for d in sources_list if d.get("category") != triage_cat][:2]
     rag_ids = rag_matching if rag_matching else [d.get("id","?") for d in sources_list[:3]]
 
     panel = (
@@ -253,7 +302,7 @@ def repairwise_chat(user_text, language, image, history):
         f"  Category : {triage.get('category','?')}\n"
         f"  Urgency  : {triage.get('urgency','?')}\n"
         f"  Reason   : {triage.get('reason','?')[:60]}\n\n"
-        f"GEMMA 4 ({gemma.get('backend','transformers').upper()})\n"
+        f"GEMMA 4 ({gemma.get('backend','ollama').upper()})\n"
         f"  Called   : {gemma.get('called', False)}\n"
         f"  Route    : {gemma.get('path', 'template')}\n\n"
         f"FUNCTION CALLING (4 tools)\n"
@@ -266,13 +315,13 @@ def repairwise_chat(user_text, language, image, history):
         f"Lang : {meta.get('language','?')}\n"
         f"Hist : {meta.get('history_used', False)}"
     )
-    # Show only category-matching sources in Knowledge source tab
+
     triage_cat_src = triage.get("category", "")
     matching_sources = [d.get("id","?") for d in sources_list if d.get("category") == triage_cat_src]
     sources = " | ".join(matching_sources) if matching_sources else " | ".join([d.get("id","?") for d in sources_list[:3]])
-    raw     = str(gemma.get("raw_output", gemma.get("raw", "")))[:300]
+    raw = str(gemma.get("raw_output", gemma.get("raw", "")))[:300]
 
-    return history, panel, sources, raw, ""
+    yield history, panel, sources, raw, ""
 
 def clear_chat():
     return [], "", "", "", ""  # Gradio 5 messages format
@@ -643,6 +692,7 @@ with gr.Blocks(
         inputs=[txt_input, lang_drop, img_input, chatbot],
         outputs=[chatbot, judge_panel, sources_out, raw_out, txt_input],
     )
+    # Note: Gradio 5 auto-detects generator functions and streams them
     clear_btn.click(fn=clear_chat, outputs=[chatbot, judge_panel, sources_out, raw_out, txt_input])
 
 demo.launch()
